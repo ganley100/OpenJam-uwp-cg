@@ -298,12 +298,13 @@ jobs:
       # The generated C++ of the guest functions named in
       # xbox/game/inspect-functions.txt, for reading what the game does.
       - name: Guest functions
+        continue-on-error: true
         run: |
           $names = Get-Content xbox/game/inspect-functions.txt | Where-Object { $_ -and -not $_.StartsWith("#") }
           $files = Get-ChildItem generated/default -Filter "*.cpp"
           foreach ($name in $names) {
             $hit = $files | Select-String -Pattern "^\S.*\b$name\b.*\{\s*$" | Select-Object -First 1
-            if (-not $hit) { Write-Host "===== $name: not found"; continue }
+            if (-not $hit) { Write-Host "===== ${name}: not found"; continue }
             Write-Host "===== $name ($($hit.Filename):$($hit.LineNumber))"
             $lines = Get-Content $hit.Path
             for ($i = $hit.LineNumber - 1; $i -lt [Math]::Min($lines.Count, $hit.LineNumber + 600); $i++) {
