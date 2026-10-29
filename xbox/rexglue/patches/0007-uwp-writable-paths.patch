@@ -1,0 +1,41 @@
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index b600b4b..ca3168c 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -108,6 +108,12 @@ bool ReXApp::OnInitialize() {
+ 
+ bool ReXApp::SetupEnvironment() {
+   auto exe_dir = rex::filesystem::GetExecutableFolder();
++#if REXGLUE_UWP
++  // OpenJam: an app's install folder is read-only and Documents is closed to
++  // it. Its working folder is LocalState (windowed_app_main_uwp.cpp), so
++  // what would be written beside the executable or in Documents goes there.
++  const auto writable_dir = std::filesystem::current_path();
++#endif
+ 
+   std::filesystem::path game_dir;
+   std::string game_data_cvar = REXCVAR_GET(game_data_root);
+@@ -121,7 +127,11 @@ bool ReXApp::SetupEnvironment() {
+   if (!user_data_cvar.empty()) {
+     user_dir = user_data_cvar;
+   } else {
++#if REXGLUE_UWP
++    user_dir = writable_dir / GetName();
++#else
+     user_dir = rex::filesystem::GetUserFolder() / GetName();
++#endif
+   }
+ 
+   // Update data: cvar override, or empty (opt-in)
+@@ -172,7 +182,11 @@ bool ReXApp::SetupEnvironment() {
+                                         log_level_str, category_levels);
+   if (log_file_cvar.empty()) {
+     log_config.app_name = std::string(GetName());
++#if REXGLUE_UWP
++    log_config.log_dir = (writable_dir / "logs").string();
++#else
+     log_config.log_dir = (exe_dir / "logs").string();
++#endif
+   }
+ 
+   rex::InitLogging(log_config);
