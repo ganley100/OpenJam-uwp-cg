@@ -20,10 +20,14 @@
 // closed from the console's own menu, which is what that menu is for.
 
 #include "mod_swap.h"
+#include "unpack_container.h"
 #include "uwp_platform.h"
 #include "watchdog.h"
 
 #include <windows.h>
+
+#include <fstream>
+#include <string>
 
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Storage.h>
@@ -39,6 +43,37 @@ std::filesystem::path NbaUwpLocalState() {
   } catch (const winrt::hresult_error&) {
     return {};
   }
+}
+
+std::filesystem::path NbaUwpGameRoot() {
+  namespace fs = std::filesystem;
+  const fs::path local = NbaUwpLocalState();
+  if (local.empty()) return {};
+  std::ofstream status(local / "status.txt");
+  const fs::path game = local / "game";
+  std::error_code ec;
+  if (fs::exists(game / "default.xex", ec)) {
+    status << "game: " << game.string() << "\n";
+    return game;
+  }
+  const fs::path container = NbaFindLiveContainer(local);
+  if (container.empty()) {
+    status << "No game yet. Copy the Xbox Live container for NBA JAM: On Fire\n"
+              "Edition (the 42-character file with no extension) into this\n"
+              "folder with Device Portal's File Explorer, then start the app\n"
+              "again.\n";
+    return {};
+  }
+  status << "unpacking " << container.filename().string() << " into "
+         << game.string() << "\n";
+  status.flush();
+  const int n = NbaUnpackLiveContainer(container, game);
+  if (n <= 0 || !fs::exists(game / "default.xex", ec)) {
+    status << "unpacking failed (" << n << " file(s))\n";
+    return {};
+  }
+  status << n << " file(s) unpacked. The container can be deleted now.\n";
+  return game;
 }
 
 bool NbaModList(std::vector<NbaMod>* mods, size_t* active) {

@@ -14,7 +14,8 @@ on:
 
 env:
   REXGLUE_TAG: v0.10.0
-  SDK_DIR: ${{ github.workspace }}/../rexglue-sdk
+  # Outside the checkout, and without "..", which upload-artifact refuses.
+  SDK_DIR: D:\rexglue-sdk
   # One configuration, not the SDK preset's three: it is the one the game uses.
   CONFIG: RelWithDebInfo
 
@@ -207,18 +208,74 @@ jobs:
             ForEach-Object { $_.Line } | Sort-Object -Unique | Select-Object -First 200
           if ($code -ne 0) { throw "build failed" }
 
-      - name: What the runtime imports
-        if: always()
-        working-directory: ${{ env.SDK_DIR }}
+      - name: SDK CLI
         run: |
-          Get-ChildItem out/build/uwp -Recurse -Include *.dll, rexglue.exe -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch "CMakeFiles" } | ForEach-Object {
+          $prefix = (Resolve-Path "$env:SDK_DIR/out/install/uwp").Path
+          "REXGLUE_PREFIX=$prefix" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          # Built with a configuration suffix (rexgluerd.exe); a console tool,
+          # so it runs here even from the UWP build.
+          $cli = Get-ChildItem "$env:SDK_DIR/out" -Recurse -Filter "rexglue*.exe" | Select-Object -First 1
+          if (-not $cli) { throw "the rexglue CLI was not built" }
+          "REXGLUE_CLI=$($cli.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      # The game, as the Xbox app (NBAJAM_UWP), against that SDK.
+      - name: Game executable
+        run: |
+          $root = Join-Path (Split-Path -Parent $env:GITHUB_WORKSPACE) "Root"
+          New-Item -ItemType Directory -Force $root | Out-Null
+          Copy-Item game/default.xex "$root/default.xex"
+
+      - name: Generate rexglue.cmake
+        run: |
+          $tmp = "$env:RUNNER_TEMP\initproj"
+          $xex = Join-Path (Split-Path -Parent $env:GITHUB_WORKSPACE) "Root\default.xex"
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          & $env:REXGLUE_CLI init --project-name nbajam_ofe --xex-path $xex --project-root $tmp
+          $found = Get-ChildItem $tmp -Recurse -Filter rexglue.cmake | Select-Object -First 1
+          if (-not $found) { throw "rexglue init did not produce generated/rexglue.cmake" }
+          New-Item -ItemType Directory -Force generated | Out-Null
+          Copy-Item $found.FullName generated/rexglue.cmake
+
+      - name: Configure game (UWP)
+        run: |
+          cmake -S . -B out/build/game-uwp -G Ninja "-DCMAKE_BUILD_TYPE=$env:CONFIG" `
+            -DNBAJAM_UWP=ON `
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ `
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
+            "-DCMAKE_PREFIX_PATH=$env:REXGLUE_PREFIX"
+          if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+
+      - name: Codegen
+        run: |
+          cmake --build out/build/game-uwp --target nbajam_ofe_codegen
+          if ($LASTEXITCODE -ne 0) { throw "codegen failed" }
+          cmake -S . -B out/build/game-uwp
+
+      - name: Build game (UWP)
+        run: |
+          cmake --build out/build/game-uwp --parallel -- -k 0 2>&1 |
+            Tee-Object -FilePath "$env:RUNNER_TEMP/game-build.log" | Select-Object -Last 40
+          $code = $LASTEXITCODE
+          Write-Host "===== errors ====="
+          Select-String -Path "$env:RUNNER_TEMP/game-build.log" -Pattern "error:|error LNK|undefined symbol" |
+            ForEach-Object { $_.Line } | Sort-Object -Unique | Select-Object -First 200
+          if ($code -ne 0) { throw "build failed" }
+
+      # What the app needs from the console, to check against the smoke test.
+      - name: What the app imports
+        if: always()
+        run: |
+          Get-ChildItem out/build/game-uwp -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in ".exe", ".dll" } | ForEach-Object {
               Write-Host "== $($_.Name)"
               dumpbin /dependents $_.FullName | Select-String -Pattern "\.dll" | ForEach-Object { "   " + $_.Line.Trim() }
             }
 
+      - name: Package
+        run: ./xbox/game/package.ps1 -BuildDir out/build/game-uwp -Out out/appx -Version "1.0.${{ github.run_number }}.0"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: rexglue-uwp
-          path: ${{ env.SDK_DIR }}/out/install/uwp
-          retention-days: 7
+          name: nbajam-xbox-appx
+          path: out/appx
+          retention-days: 30

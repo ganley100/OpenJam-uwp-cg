@@ -118,6 +118,12 @@ class NbajamOfeApp : public rex::ReXApp {
     // than a command line, and what lets a mod be reached by pointing the
     // same executable at mods\<name> instead.
     const std::filesystem::path home = ExeDir();
+#if NBAJAM_UWP
+    // The package is only the program; the game is in the app's storage.
+    if (paths.game_data_root.empty()) {
+      paths.game_data_root = NbaUwpGameRoot();
+    }
+#endif
     if (paths.game_data_root.empty() && !home.empty()) {
       paths.game_data_root = home;
     }

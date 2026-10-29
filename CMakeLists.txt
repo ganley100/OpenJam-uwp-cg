@@ -43,9 +43,8 @@ if(WIN32)
     list(APPEND NBAJAMOFE_SOURCES res/app.rc)
 endif()
 
-# Xbox One, as a UWP app in Developer Mode. See XBOX.md: this builds the port's
-# own code for the app container, but the game only runs once the ReXGlue SDK
-# it links against has been built for UWP too, which v0.10.0 cannot be.
+# Xbox One, as a UWP app in Developer Mode, against a ReXGlue built with the
+# patches in xbox/rexglue (REXGLUE_UWP). See XBOX.md and xbox/rexglue.
 #
 # A UWP app cannot start another process, so the in-game mod swap and the
 # watchdog's restart have nothing to work with. src/uwp_platform.cpp stands in
@@ -54,7 +53,7 @@ option(NBAJAM_UWP "Build for the UWP app container (Xbox One Developer Mode)" OF
 
 if(NBAJAM_UWP)
     if(NOT WIN32)
-        message(FATAL_ERROR "NBAJAM_UWP needs a Windows host and clang-cl")
+        message(FATAL_ERROR "NBAJAM_UWP needs a Windows host")
     endif()
     # Neither runs in an app container: both resolve symbols through DbgHelp,
     # which is a desktop-only library.
@@ -86,29 +85,13 @@ endif()
 rexglue_setup_target(nbajam_ofe GPU_PLUGINS xenos)
 
 if(NBAJAM_UWP)
-    # Built with a plain Windows target and these flags rather than
-    # CMAKE_SYSTEM_NAME=WindowsStore, which CMake only fully supports with the
-    # Visual Studio generators, not Ninja and clang-cl.
-    target_compile_definitions(nbajam_ofe PRIVATE
-        NBAJAM_UWP=1
-        WINAPI_FAMILY=WINAPI_FAMILY_APP
-        _UNICODE UNICODE)
-    # The app CRT (vcruntime140_app, msvcp140_app) lives in MSVC's `store`
-    # library folder. It has to be searched before the desktop one, or the
-    # package depends on a CRT the console does not have.
-    set(NBAJAM_UWP_CRT_DIR "$ENV{VCToolsInstallDir}lib/x64/store" CACHE PATH
-        "MSVC's lib/x64/store folder, holding the app-container CRT")
-    if(NOT EXISTS "${NBAJAM_UWP_CRT_DIR}")
-        message(FATAL_ERROR "No app CRT at '${NBAJAM_UWP_CRT_DIR}'. Configure "
-            "from a VS x64 Developer prompt, or set NBAJAM_UWP_CRT_DIR.")
-    endif()
-    target_link_directories(nbajam_ofe BEFORE PRIVATE "${NBAJAM_UWP_CRT_DIR}")
-    target_link_options(nbajam_ofe PRIVATE
-        /APPCONTAINER
-        /NODEFAULTLIB:kernel32.lib /NODEFAULTLIB:ole32.lib)
-    # WindowsApp.lib is the umbrella import library for every API an app may
-    # call; xinputuap.lib is XInput 1.4 as the app container has it.
-    target_link_libraries(nbajam_ofe PRIVATE WindowsApp.lib xinputuap.lib)
+    # Ordinary Windows code, like the patched SDK: only the window and the
+    # app's entry are UWP, and the SDK's helper already supplies those, with
+    # /APPCONTAINER and WindowsApp.lib. The desktop C++ runtime DLLs ship
+    # inside the package (xbox/game/package.ps1).
+    target_compile_definitions(nbajam_ofe PRIVATE NBAJAM_UWP=1)
+    # xinputuap.lib is XInput 1.4 as an app links it.
+    target_link_libraries(nbajam_ofe PRIVATE xinputuap.lib)
 endif()
 
 # ReXGlue v0.10.0 translates vpkuwus/vpkuhus by writing the destination

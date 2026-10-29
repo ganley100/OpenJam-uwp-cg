@@ -11,3 +11,10 @@
 // Empty if the app has no package identity, which only happens when the
 // executable is started outside its package.
 std::filesystem::path NbaUwpLocalState();
+
+// The game root on the console. The package holds only the program; the game
+// lives in LocalState\game, unpacked there on first launch from the Xbox Live
+// container the player copied into LocalState through Device Portal. Empty if
+// there is neither. What happened is written to LocalState\status.txt, since
+// this runs before there is a log.
+std::filesystem::path NbaUwpGameRoot();

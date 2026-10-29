@@ -1,0 +1,32 @@
+diff --git a/src/core/mapped_memory_win.cpp b/src/core/mapped_memory_win.cpp
+index 6085abc..a9cc1e3 100644
+--- a/src/core/mapped_memory_win.cpp
++++ b/src/core/mapped_memory_win.cpp
+@@ -22,8 +22,10 @@
+ #include <rex/memory/mapped_memory.h>
+ #include <rex/memory/utils.h>
+ 
++// OpenJam: a UWP build (REXGLUE_UWP) is ordinary Windows code otherwise, but
++// maps memory the way an app must, with the FromApp calls.
+ #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP | WINAPI_PARTITION_SYSTEM | \
+-                            WINAPI_PARTITION_GAMES)
++                            WINAPI_PARTITION_GAMES) && !REXGLUE_UWP
+ #define REX_BASE_MAPPED_MEMORY_WIN_USE_DESKTOP_FUNCTIONS
+ #endif
+ 
+diff --git a/src/core/memory_win.cpp b/src/core/memory_win.cpp
+index 9a668e9..29db939 100644
+--- a/src/core/memory_win.cpp
++++ b/src/core/memory_win.cpp
+@@ -13,8 +13,10 @@
+ 
+ #include <rex/memory/utils.h>
+ 
++// OpenJam: a UWP build (REXGLUE_UWP) is ordinary Windows code otherwise, but
++// maps memory the way an app must, with the FromApp calls.
+ #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP | WINAPI_PARTITION_SYSTEM | \
+-                            WINAPI_PARTITION_GAMES)
++                            WINAPI_PARTITION_GAMES) && !REXGLUE_UWP
+ #define REX_BASE_MEMORY_WIN_USE_DESKTOP_FUNCTIONS
+ #endif
+ 
