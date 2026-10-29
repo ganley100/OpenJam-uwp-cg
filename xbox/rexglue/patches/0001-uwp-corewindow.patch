@@ -1,0 +1,943 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 9b3cdf5..0956592 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -23,6 +23,17 @@ option(REXGLUE_ENABLE_SANITIZERS "Enable UndefinedBehaviorSanitizer" OFF)
+ option(REXGLUE_ENABLE_FIDELITYFX "Enable optional AMD FidelityFX integration (experimental)" OFF)
+ option(REXGLUE_ENABLE_TRACY                "Enable Tracy profiler integration" ON)
+ option(REXGLUE_ENABLE_PERF_COUNTERS        "Enable lightweight perf counter registry and overlay" ON)
++# Xbox One (UWP, Developer Mode). The runtime stays ordinary Windows code; what
++# changes is everything SDL3 did - the window becomes a CoreWindow, input is
++# XInput and audio is silent - since SDL3 has no UWP support. OpenJam patch.
++option(REXGLUE_UWP "Build the runtime for a UWP app on Xbox One" OFF)
++if(REXGLUE_UWP)
++    if(NOT WIN32)
++        message(FATAL_ERROR "REXGLUE_UWP is a Windows build")
++    endif()
++    set(REXGLUE_ENABLE_TRACY OFF CACHE BOOL "" FORCE)
++    add_compile_definitions(REXGLUE_UWP=1)
++endif()
+ # Propagate profiling defines globally (compiled out in Release)
+ if(REXGLUE_ENABLE_TRACY)
+     add_compile_definitions($<$<NOT:$<CONFIG:Release>>:REXGLUE_ENABLE_PROFILING>)
+diff --git a/cmake/rexglueConfig.cmake.in b/cmake/rexglueConfig.cmake.in
+index ff7f132..ef10d9c 100644
+--- a/cmake/rexglueConfig.cmake.in
++++ b/cmake/rexglueConfig.cmake.in
+@@ -15,7 +15,10 @@ list(PREPEND CMAKE_PREFIX_PATH "${PACKAGE_PREFIX_DIR}")
+ find_dependency(fmt CONFIG)
+ find_dependency(spdlog CONFIG)
+ find_dependency(utf8cpp CONFIG)
+-find_dependency(SDL3 CONFIG)
++set(REXGLUE_UWP @REXGLUE_UWP@)
++if(NOT REXGLUE_UWP)  # OpenJam: a UWP build has no SDL3
++    find_dependency(SDL3 CONFIG)
++endif()
+ 
+ set(REXGLUE_USE_VULKAN @REXGLUE_USE_VULKAN@)
+ if(REXGLUE_USE_VULKAN)
+diff --git a/cmake/rexglue_helpers.cmake b/cmake/rexglue_helpers.cmake
+index 41e6dce..9c06060 100644
+--- a/cmake/rexglue_helpers.cmake
++++ b/cmake/rexglue_helpers.cmake
+@@ -77,9 +77,19 @@ endfunction()
+ function(rexglue_configure_target target_name)
+     cmake_parse_arguments(ARG "" "" "GPU_PLUGINS" ${ARGN})
+ 
+-    target_sources(${target_name} PRIVATE
+-        ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp
+-        ${REXGLUE_SHARE_DIR}/rex_app.cpp)
++    if(REXGLUE_UWP)
++        # OpenJam: a UWP app (Xbox One) enters through CoreApplication.
++        target_sources(${target_name} PRIVATE
++            ${REXGLUE_SHARE_DIR}/windowed_app_main_uwp.cpp
++            ${REXGLUE_SHARE_DIR}/rex_app.cpp)
++        target_compile_definitions(${target_name} PRIVATE REXGLUE_UWP=1)
++        target_link_options(${target_name} PRIVATE /APPCONTAINER)
++        target_link_libraries(${target_name} PRIVATE WindowsApp.lib)
++    else()
++        target_sources(${target_name} PRIVATE
++            ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp
++            ${REXGLUE_SHARE_DIR}/rex_app.cpp)
++    endif()
+ 
+     target_compile_definitions(${target_name} PRIVATE
+         REXGLUE_BUILD_CONFIG="$<CONFIG>")
+diff --git a/cmake/rexglue_install.cmake b/cmake/rexglue_install.cmake
+index d9a64eb..4b52d57 100644
+--- a/cmake/rexglue_install.cmake
++++ b/cmake/rexglue_install.cmake
+@@ -124,6 +124,7 @@ endif()
+ # Install the entry point source and ReXApp for SDK consumers
+ install(FILES
+     src/ui/windowed_app_main_sdl.cpp
++    src/ui/windowed_app_main_uwp.cpp
+     src/ui/rex_app.cpp
+     DESTINATION ${CMAKE_INSTALL_DATADIR}/rexglue
+ )
+diff --git a/include/rex/ui/surface.h b/include/rex/ui/surface.h
+index a302000..18b3ff8 100644
+--- a/include/rex/ui/surface.h
++++ b/include/rex/ui/surface.h
+@@ -34,6 +34,8 @@ class Surface {
+     kTypeIndex_XcbWindow,
+     // Windows.
+     kTypeIndex_Win32Hwnd,
++    // UWP (Xbox One): a CoreWindow. OpenJam patch.
++    kTypeIndex_WinRTCoreWindow,
+     // macOS — CAMetalLayer presented via MoltenVK (VK_EXT_metal_surface).
+     kTypeIndex_CAMetalLayer,
+   };
+@@ -43,6 +45,7 @@ class Surface {
+     kTypeFlag_WaylandSurface = TypeFlags(1) << kTypeIndex_WaylandSurface,
+     kTypeFlag_XcbWindow = TypeFlags(1) << kTypeIndex_XcbWindow,
+     kTypeFlag_Win32Hwnd = TypeFlags(1) << kTypeIndex_Win32Hwnd,
++    kTypeFlag_WinRTCoreWindow = TypeFlags(1) << kTypeIndex_WinRTCoreWindow,
+     kTypeFlag_CAMetalLayer = TypeFlags(1) << kTypeIndex_CAMetalLayer,
+   };
+ 
+diff --git a/include/rex/ui/surface_winrt.h b/include/rex/ui/surface_winrt.h
+new file mode 100644
+index 0000000..1365d85
+--- /dev/null
++++ b/include/rex/ui/surface_winrt.h
+@@ -0,0 +1,37 @@
++/**
++ * @file        ui/surface_winrt.h
++ * @brief       A UWP CoreWindow as a presentation surface (Xbox One)
++ *
++ * @remarks     OpenJam patch for the UWP build (REXGLUE_UWP).
++ */
++
++#pragma once
++
++#include <unknwn.h>
++
++#include <rex/ui/surface.h>
++
++namespace rex::ui {
++
++class Window;
++
++// The CoreWindow is held as its ABI IUnknown, so nothing that includes this
++// needs C++/WinRT. The size comes from the Window, which tracks it from the
++// CoreWindow's own events.
++class WinRTCoreWindowSurface final : public Surface {
++ public:
++  WinRTCoreWindowSurface(::IUnknown* core_window, const Window* window);
++  ~WinRTCoreWindowSurface() override;
++
++  TypeIndex GetType() const override { return kTypeIndex_WinRTCoreWindow; }
++  ::IUnknown* core_window() const { return core_window_; }
++
++ protected:
++  bool GetSizeImpl(uint32_t& width_out, uint32_t& height_out) const override;
++
++ private:
++  ::IUnknown* core_window_;
++  const Window* window_;
++};
++
++}  // namespace rex::ui
+diff --git a/include/rex/ui/window_uwp.h b/include/rex/ui/window_uwp.h
+new file mode 100644
+index 0000000..3d7f868
+--- /dev/null
++++ b/include/rex/ui/window_uwp.h
+@@ -0,0 +1,57 @@
++/**
++ * @file        ui/window_uwp.h
++ * @brief       UWP (CoreWindow) implementation of the Window abstraction
++ *
++ * @remarks     OpenJam patch for the UWP build (REXGLUE_UWP), standing in for
++ *              WindowSDL.
++ */
++
++#pragma once
++
++#include <atomic>
++#include <cstdint>
++#include <memory>
++#include <string_view>
++
++#include <rex/ui/window.h>
++#include <rex/ui/windowed_app_context_uwp.h>
++
++namespace rex::ui {
++
++// The app's one CoreWindow. It is always full screen and cannot be closed by
++// the app, only by the system, so most of what a desktop window does is
++// absent here.
++class WindowUWP final : public Window {
++ public:
++  WindowUWP(WindowedAppContext& app_context, const std::string_view title,
++            uint32_t desired_logical_width, uint32_t desired_logical_height);
++  ~WindowUWP() override;
++
++ protected:
++  uint32_t GetLatestDpiImpl() const override;
++
++  bool OpenImpl() override;
++  void RequestCloseImpl() override;
++
++  std::unique_ptr<Surface> CreateSurfaceImpl(Surface::TypeFlags allowed_types) override;
++  void RequestPaintImpl() override;
++
++ private:
++  struct Impl;
++
++  UWPWindowedAppContext& uwp_app_context() const {
++    return static_cast<UWPWindowedAppContext&>(app_context());
++  }
++
++  void UpdateSize();
++  void HandlePaint();
++  void HandleClosed();
++  void PerformClose();
++  void Detach();
++
++  std::unique_ptr<Impl> impl_;
++  std::atomic<bool> paint_pending_{false};
++  uint32_t dpi_ = 96;
++};
++
++}  // namespace rex::ui
+diff --git a/include/rex/ui/windowed_app_context_uwp.h b/include/rex/ui/windowed_app_context_uwp.h
+new file mode 100644
+index 0000000..6eee393
+--- /dev/null
++++ b/include/rex/ui/windowed_app_context_uwp.h
+@@ -0,0 +1,41 @@
++/**
++ * @file        ui/windowed_app_context_uwp.h
++ * @brief       UWP (CoreWindow) implementation of the windowed app UI loop
++ *
++ * @remarks     OpenJam patch for the UWP build (REXGLUE_UWP), standing in for
++ *              SDLWindowedAppContext. SDL3 has no UWP support.
++ */
++
++#pragma once
++
++#include <memory>
++
++#include <unknwn.h>
++
++#include <rex/ui/windowed_app_context.h>
++
++namespace rex::ui {
++
++// One CoreWindow, the one CoreApplication gives the app. The UI thread is the
++// CoreWindow's thread, and pending functions reach it through its dispatcher.
++class UWPWindowedAppContext final : public WindowedAppContext {
++ public:
++  // `core_window` is the ABI pointer of the app's CoreWindow.
++  explicit UWPWindowedAppContext(::IUnknown* core_window);
++  ~UWPWindowedAppContext() override;
++
++  void NotifyUILoopOfPendingFunctions() override;
++  void PlatformQuitFromUIThread() override;
++
++  int RunMainMessageLoop();
++
++  ::IUnknown* core_window() const { return core_window_; }
++
++  // Runs `function` on the UI thread from the dispatcher, from any thread.
++  void PostToUIThread(void (*function)(void*), void* data);
++
++ private:
++  ::IUnknown* core_window_;
++};
++
++}  // namespace rex::ui
+diff --git a/src/audio/CMakeLists.txt b/src/audio/CMakeLists.txt
+index d55f16a..a49d9ec 100644
+--- a/src/audio/CMakeLists.txt
++++ b/src/audio/CMakeLists.txt
+@@ -11,10 +11,14 @@ add_library(rexaudio OBJECT
+     xma_register_file.cpp
+     # NOP backend (always available)
+     nop/nop_audio_system.cpp
+-    # SDL backend
+-    sdl/sdl_audio_system.cpp
+-    sdl/sdl_audio_driver.cpp
+ )
++# OpenJam: a UWP build has no SDL3, and so no sound yet.
++if(NOT REXGLUE_UWP)
++    target_sources(rexaudio PRIVATE
++        sdl/sdl_audio_system.cpp
++        sdl/sdl_audio_driver.cpp
++    )
++endif()
+ add_library(rex::audio ALIAS rexaudio)
+ 
+ rex_target_pch(rexaudio
+@@ -36,6 +40,9 @@ target_include_directories(rexaudio PUBLIC
+ )
+ 
+ target_link_libraries(rexaudio
+-    PUBLIC rexcore SDL3::SDL3
++    PUBLIC rexcore
+     PRIVATE libavcodec libavutil
+ )
++if(NOT REXGLUE_UWP)
++    target_link_libraries(rexaudio PUBLIC SDL3::SDL3)
++endif()
+diff --git a/src/core/dynlib_win.cpp b/src/core/dynlib_win.cpp
+index a402c75..70d03d8 100644
+--- a/src/core/dynlib_win.cpp
++++ b/src/core/dynlib_win.cpp
+@@ -27,7 +27,12 @@ DynamicLibrary& DynamicLibrary::operator=(DynamicLibrary&& other) noexcept {
+ bool DynamicLibrary::Load(const std::filesystem::path& path, SymbolResolution /*mode*/) {
+   // Windows resolves all imports at load time; mode is informational only.
+   Close();
++#if REXGLUE_UWP
++  // OpenJam: an app loads its own DLLs by name, from its package.
++  handle_ = static_cast<void*>(LoadPackagedLibrary(path.filename().c_str(), 0));
++#else
+   handle_ = static_cast<void*>(LoadLibraryW(path.c_str()));
++#endif
+   return handle_ != nullptr;
+ }
+ 
+diff --git a/src/input/CMakeLists.txt b/src/input/CMakeLists.txt
+index 3ea3535..d6f33fc 100644
+--- a/src/input/CMakeLists.txt
++++ b/src/input/CMakeLists.txt
+@@ -29,10 +29,14 @@ target_include_directories(rexinput PUBLIC
+     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+ )
+-if(WIN32)
++if(REXGLUE_UWP)
++    # OpenJam: XInput only. xinputuap is the same XInput 1.4 as an app has it.
++    target_sources(rexinput PRIVATE xinput/xinput_input_driver.cpp)
++    target_link_libraries(rexinput PUBLIC rexcore rexui xinputuap.lib)
++elseif(WIN32)
+     target_sources(rexinput PRIVATE sdl/sdl_input_driver.cpp xinput/xinput_input_driver.cpp)
++    target_link_libraries(rexinput PUBLIC rexcore rexui SDL3::SDL3)
+ else()
+     target_sources(rexinput PRIVATE sdl/sdl_input_driver.cpp)
++    target_link_libraries(rexinput PUBLIC rexcore rexui SDL3::SDL3)
+ endif()
+-
+-target_link_libraries(rexinput PUBLIC rexcore rexui SDL3::SDL3)
+diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
+index 813bb1c..272ee4f 100644
+--- a/src/input/input_system.cpp
++++ b/src/input/input_system.cpp
+@@ -19,12 +19,19 @@
+ #include <rex/input/input_system.h>
+ #include <rex/input/mnk/mnk_input_driver.h>
+ #include <rex/input/nop/nop_input_driver.h>
++#if !REXGLUE_UWP
+ #include <rex/input/sdl/sdl_input_driver.h>
++#endif
+ #include <rex/input/state_merge.h>
+ #include <rex/input/xinput/xinput_input_driver.h>
+ #include <rex/logging.h>
+ 
++#if REXGLUE_UWP
++// OpenJam: XInput is the only backend an Xbox app has.
++REXCVAR_DEFINE_STRING(input_backend, "xinput", "Input", "Input backend: sdl, xinput")
++#else
+ REXCVAR_DEFINE_STRING(input_backend, "sdl", "Input", "Input backend: sdl, xinput")
++#endif
+     .allowed({"sdl", "xinput"});
+ 
+ REXCVAR_DEFINE_BOOL(guide_button, false, "Input", "Enable guide button pass-through");
+@@ -334,12 +341,14 @@ std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode) {
+     }
+ #endif
+ 
++#if !REXGLUE_UWP
+     if (REXCVAR_GET(input_backend) == "sdl") {
+       auto sdl_driver = std::make_unique<sdl::SDLInputDriver>(nullptr, 0);
+       if (sdl_driver->Setup() == X_STATUS_SUCCESS) {
+         input->AddDriver(std::move(sdl_driver));
+       }
+     }
++#endif
+ 
+     // MnK driver (keyboard/mouse -> controller emulation)
+     auto mnk_driver = std::make_unique<mnk::MnkInputDriver>(nullptr, 0);
+diff --git a/src/input/xinput/xinput_input_driver.cpp b/src/input/xinput/xinput_input_driver.cpp
+index a6a1da9..30dc165 100644
+--- a/src/input/xinput/xinput_input_driver.cpp
++++ b/src/input/xinput/xinput_input_driver.cpp
+@@ -89,6 +89,18 @@ XinputInputDriver::~XinputInputDriver() {
+ }
+ 
+ X_STATUS XinputInputDriver::Setup() {
++#if REXGLUE_UWP
++  // OpenJam: an app links XInput (xinputuap) rather than loading it, and
++  // gets no XInputGetStateEx, so no guide button.
++  module_ = nullptr;
++  XInputGetCapabilities_ = reinterpret_cast<decltype(XInputGetCapabilities_)>(&::XInputGetCapabilities);
++  XInputGetState_ = reinterpret_cast<decltype(XInputGetState_)>(&::XInputGetState);
++  XInputGetStateEx_ = nullptr;
++  XInputGetKeystroke_ = reinterpret_cast<decltype(XInputGetKeystroke_)>(&::XInputGetKeystroke);
++  XInputSetState_ = reinterpret_cast<decltype(XInputSetState_)>(&::XInputSetState);
++  XInputEnable_ = nullptr;
++  return X_STATUS_SUCCESS;
++#endif
+   HMODULE module = LoadLibraryW(L"xinput1_4.dll");
+   if (!module) {
+     return X_STATUS_DLL_NOT_FOUND;
+diff --git a/src/system/CMakeLists.txt b/src/system/CMakeLists.txt
+index fc46d86..ff21145 100644
+--- a/src/system/CMakeLists.txt
++++ b/src/system/CMakeLists.txt
+@@ -77,13 +77,15 @@ target_include_directories(rexruntime PRIVATE
+     ${REXGLUE_ROOT}/thirdparty
+ )
+ 
++if(NOT REXGLUE_UWP)  # OpenJam: no SDL3 in a UWP build
++    target_link_libraries(rexruntime PUBLIC SDL3::SDL3)
++endif()
+ target_link_libraries(rexruntime
+     PUBLIC
+         simde
+         fmt::fmt
+         spdlog::spdlog
+         tomlplusplus
+-        SDL3::SDL3
+     PRIVATE
+         aes128
+         mspack
+diff --git a/src/ui/CMakeLists.txt b/src/ui/CMakeLists.txt
+index 5bd3dc5..30ac514 100644
+--- a/src/ui/CMakeLists.txt
++++ b/src/ui/CMakeLists.txt
+@@ -12,13 +12,24 @@ set(REXUI_CORE_SOURCES
+     menu_item.cpp
+     presenter.cpp
+     renderdoc_api.cpp
+-    sdl_virtual_key.cpp
+     window.cpp
+-    window_sdl.cpp
+     windowed_app.cpp
+     windowed_app_context.cpp
+-    windowed_app_context_sdl.cpp
+ )
++# OpenJam: a UWP build has a CoreWindow where everything else has SDL3.
++if(REXGLUE_UWP)
++    list(APPEND REXUI_CORE_SOURCES
++        surface_winrt.cpp
++        window_uwp.cpp
++        windowed_app_context_uwp.cpp
++    )
++else()
++    list(APPEND REXUI_CORE_SOURCES
++        sdl_virtual_key.cpp
++        window_sdl.cpp
++        windowed_app_context_sdl.cpp
++    )
++endif()
+ 
+ # Optional overlay dialogs
+ set(REXUI_OVERLAY_SOURCES
+@@ -112,8 +123,13 @@ target_link_libraries(rexui PUBLIC
+     rexcore
+     renderdoc
+     imgui::imgui
+-    SDL3::SDL3
+ )
++if(REXGLUE_UWP)
++    # C++/WinRT's activation and the CoreWindow APIs.
++    target_link_libraries(rexui PUBLIC WindowsApp.lib)
++else()
++    target_link_libraries(rexui PUBLIC SDL3::SDL3)
++endif()
+ target_link_libraries(rexui PRIVATE utf8cpp)
+ 
+ if(REXGLUE_FIDELITYFX_SOURCE_DIR AND EXISTS "${REXGLUE_FIDELITYFX_SOURCE_DIR}/sdk/include")
+diff --git a/src/ui/d3d12/d3d12_presenter.cpp b/src/ui/d3d12/d3d12_presenter.cpp
+index 306118e..e3ab8bb 100644
+--- a/src/ui/d3d12/d3d12_presenter.cpp
++++ b/src/ui/d3d12/d3d12_presenter.cpp
+@@ -23,6 +23,9 @@
+ #include <rex/ui/d3d12/d3d12_provider.h>
+ #include <rex/ui/d3d12/d3d12_util.h>
+ #include <rex/ui/surface_win.h>
++#if REXGLUE_UWP
++#include <rex/ui/surface_winrt.h>
++#endif
+ 
+ #if defined(REX_HAS_FIDELITYFX_RUNTIME) && REX_HAS_FIDELITYFX_RUNTIME
+ #include <ffx_api/dx12/ffx_api_dx12.h>
+@@ -196,7 +199,9 @@ bool D3D12Presenter::DispatchTemporalUpscaler(ID3D12GraphicsCommandList* command
+ 
+ Surface::TypeFlags D3D12Presenter::GetSupportedSurfaceTypes() const {
+   Surface::TypeFlags types = 0;
+-#if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP | WINAPI_PARTITION_GAMES)
++#if REXGLUE_UWP
++  types |= Surface::kTypeFlag_WinRTCoreWindow;
++#elif WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP | WINAPI_PARTITION_GAMES)
+   types |= Surface::kTypeFlag_Win32Hwnd;
+ #endif
+   return types;
+@@ -430,6 +435,18 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_sur
+         // borderless fullscreen anyway with better state tracking.
+         dxgi_factory->MakeWindowAssociation(surface_hwnd, DXGI_MWA_NO_ALT_ENTER);
+       } break;
++#endif
++#if REXGLUE_UWP
++      // OpenJam: Xbox One.
++      case Surface::kTypeIndex_WinRTCoreWindow: {
++        ::IUnknown* core_window =
++            static_cast<const WinRTCoreWindowSurface&>(new_surface).core_window();
++        if (FAILED(dxgi_factory->CreateSwapChainForCoreWindow(
++                direct_queue, core_window, &swap_chain_desc, nullptr, &swap_chain_1))) {
++          REXLOG_ERROR("D3D12Presenter: Failed to create a swap chain for the CoreWindow");
++          return SurfacePaintConnectResult::kFailure;
++        }
++      } break;
+ #endif
+       default:
+         assert_unhandled_case(surface_type);
+diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
+index 7360ed9..00e86da 100644
+--- a/src/ui/presenter.cpp
++++ b/src/ui/presenter.cpp
+@@ -1432,6 +1432,7 @@ void Presenter::UpdateSurfaceMonitorFromUIThread(bool old_monitor_potentially_di
+   // of `window_`.
+ #if REX_PLATFORM_WIN32
+   HMONITOR surface_new_win32_monitor = nullptr;
++#if !REXGLUE_UWP  // OpenJam: one fixed display, and no user32
+   if (surface_) {
+     HWND hwnd = static_cast<HWND>(window_->GetNativeWindowHandle());
+     // The HWND may be non-existent if the window has been closed and destroyed
+@@ -1440,6 +1441,7 @@ void Presenter::UpdateSurfaceMonitorFromUIThread(bool old_monitor_potentially_di
+       surface_new_win32_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL);
+     }
+   }
++#endif
+   if (old_monitor_potentially_disconnected || surface_win32_monitor_ != surface_new_win32_monitor) {
+     surface_win32_monitor_ = surface_new_win32_monitor;
+     if (dxgi_ui_tick_factory_ && !dxgi_ui_tick_factory_->IsCurrent()) {
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index b94fe9e..b600b4b 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -26,7 +26,11 @@
+ #include <rex/ui/overlay/debug_overlay.h>
+ #include <rex/ui/overlay/settings_overlay.h>
+ #include <rex/audio/audio_system.h>
++#if REXGLUE_UWP
++#include <rex/audio/nop/nop_audio_system.h>
++#else
+ #include <rex/audio/sdl/sdl_audio_system.h>
++#endif
+ #include <rex/input/input_system.h>
+ #include <rex/kernel/init.h>
+ #include <rex/string/numeric.h>
+@@ -307,7 +311,12 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+ 
+ bool ReXApp::SetupPresentation() {
+   config_.gpu_plugin = REXCVAR_GET(gpu_plugin);
++#if REXGLUE_UWP
++  // OpenJam: SDL3 is the only real audio backend, and a UWP build has none.
++  config_.audio_factory = REX_AUDIO_BACKEND(rex::audio::nop::NopAudioSystem);
++#else
+   config_.audio_factory = REX_AUDIO_BACKEND(rex::audio::sdl::SDLAudioSystem);
++#endif
+   config_.input_factory = REX_INPUT_BACKEND(rex::input::CreateDefaultInputSystem);
+   config_.kernel_init = rex::kernel::InitializeKernel;
+ 
+diff --git a/src/ui/surface_winrt.cpp b/src/ui/surface_winrt.cpp
+new file mode 100644
+index 0000000..52dda49
+--- /dev/null
++++ b/src/ui/surface_winrt.cpp
+@@ -0,0 +1,33 @@
++/**
++ * @file        ui/surface_winrt.cpp
++ * @brief       A UWP CoreWindow as a presentation surface (Xbox One)
++ *
++ * @remarks     OpenJam patch for the UWP build (REXGLUE_UWP).
++ */
++
++#include <rex/ui/surface_winrt.h>
++
++#include <rex/ui/window.h>
++
++namespace rex::ui {
++
++WinRTCoreWindowSurface::WinRTCoreWindowSurface(::IUnknown* core_window, const Window* window)
++    : core_window_(core_window), window_(window) {
++  if (core_window_) {
++    core_window_->AddRef();
++  }
++}
++
++WinRTCoreWindowSurface::~WinRTCoreWindowSurface() {
++  if (core_window_) {
++    core_window_->Release();
++  }
++}
++
++bool WinRTCoreWindowSurface::GetSizeImpl(uint32_t& width_out, uint32_t& height_out) const {
++  width_out = window_->GetActualPhysicalWidth();
++  height_out = window_->GetActualPhysicalHeight();
++  return width_out && height_out;
++}
++
++}  // namespace rex::ui
+diff --git a/src/ui/window_uwp.cpp b/src/ui/window_uwp.cpp
+new file mode 100644
+index 0000000..ff4b1a9
+--- /dev/null
++++ b/src/ui/window_uwp.cpp
+@@ -0,0 +1,167 @@
++/**
++ * @file        ui/window_uwp.cpp
++ * @brief       UWP (CoreWindow) implementation of the Window abstraction
++ *
++ * @remarks     OpenJam patch for the UWP build (REXGLUE_UWP).
++ */
++
++#include <rex/ui/window_uwp.h>
++
++#include <cmath>
++
++#include <winrt/Windows.Foundation.h>
++#include <winrt/Windows.Graphics.Display.h>
++#include <winrt/Windows.System.h>
++#include <winrt/Windows.UI.Core.h>
++
++#include <rex/logging.h>
++#include <rex/ui/surface_winrt.h>
++
++namespace rex::ui {
++
++using winrt::Windows::Graphics::Display::DisplayInformation;
++using winrt::Windows::UI::Core::CoreWindow;
++
++struct WindowUWP::Impl {
++  CoreWindow window{nullptr};
++  winrt::event_token size_changed{};
++  winrt::event_token activated{};
++  winrt::event_token closed{};
++  winrt::event_token key_down{};
++  winrt::event_token key_up{};
++  double pixels_per_dip = 1.0;
++};
++
++std::unique_ptr<Window> Window::Create(WindowedAppContext& app_context,
++                                       const std::string_view title, uint32_t desired_logical_width,
++                                       uint32_t desired_logical_height) {
++  return std::make_unique<WindowUWP>(app_context, title, desired_logical_width,
++                                     desired_logical_height);
++}
++
++WindowUWP::WindowUWP(WindowedAppContext& app_context, const std::string_view title,
++                     uint32_t desired_logical_width, uint32_t desired_logical_height)
++    : Window(app_context, title, desired_logical_width, desired_logical_height),
++      impl_(std::make_unique<Impl>()) {}
++
++WindowUWP::~WindowUWP() {
++  EnterDestructor();
++  Detach();
++}
++
++uint32_t WindowUWP::GetLatestDpiImpl() const {
++  return dpi_;
++}
++
++bool WindowUWP::OpenImpl() {
++  winrt::copy_from_abi(impl_->window, uwp_app_context().core_window());
++  try {
++    // Must be asked on the UI thread, which this is.
++    auto display = DisplayInformation::GetForCurrentView();
++    impl_->pixels_per_dip = display.RawPixelsPerViewPixel();
++    dpi_ = uint32_t(std::lround(display.LogicalDpi()));
++  } catch (const winrt::hresult_error&) {
++    impl_->pixels_per_dip = 1.0;
++  }
++  if (impl_->pixels_per_dip <= 0.0) {
++    impl_->pixels_per_dip = 1.0;
++  }
++
++  impl_->size_changed = impl_->window.SizeChanged([this](auto&&, auto&&) { UpdateSize(); });
++  impl_->activated = impl_->window.Activated([this](auto&&, auto&& args) {
++    WindowDestructionReceiver destruction_receiver(this);
++    OnFocusUpdate(args.WindowActivationState() !=
++                      winrt::Windows::UI::Core::CoreWindowActivationState::Deactivated,
++                  destruction_receiver);
++  });
++  impl_->closed = impl_->window.Closed([this](auto&&, auto&&) { HandleClosed(); });
++  // Keys, for the debug overlays; a controller arrives through XInput.
++  auto key = [this](bool down, winrt::Windows::UI::Core::KeyEventArgs const& args) {
++    const auto status = args.KeyStatus();
++    KeyEvent e(this, VirtualKey(uint16_t(args.VirtualKey())), int(status.RepeatCount),
++               status.WasKeyDown, false, false, status.IsMenuKeyDown, false);
++    WindowDestructionReceiver destruction_receiver(this);
++    if (down) {
++      OnKeyDown(e, destruction_receiver);
++    } else {
++      OnKeyUp(e, destruction_receiver);
++    }
++  };
++  impl_->key_down = impl_->window.KeyDown([key](auto&&, auto&& args) { key(true, args); });
++  impl_->key_up = impl_->window.KeyUp([key](auto&&, auto&& args) { key(false, args); });
++
++  WindowDestructionReceiver destruction_receiver(this);
++  UpdateSize();
++  OnFocusUpdate(true, destruction_receiver);
++  REXLOG_INFO("WindowUWP: CoreWindow {}x{} physical, {} DPI", GetActualPhysicalWidth(),
++              GetActualPhysicalHeight(), dpi_);
++  return true;
++}
++
++void WindowUWP::UpdateSize() {
++  if (!impl_->window) {
++    return;
++  }
++  const auto bounds = impl_->window.Bounds();
++  const uint32_t width = uint32_t(std::lround(bounds.Width * impl_->pixels_per_dip));
++  const uint32_t height = uint32_t(std::lround(bounds.Height * impl_->pixels_per_dip));
++  WindowDestructionReceiver destruction_receiver(this);
++  OnActualSizeUpdate(width, height, destruction_receiver);
++}
++
++void WindowUWP::Detach() {
++  if (!impl_->window) {
++    return;
++  }
++  impl_->window.SizeChanged(impl_->size_changed);
++  impl_->window.Activated(impl_->activated);
++  impl_->window.Closed(impl_->closed);
++  impl_->window.KeyDown(impl_->key_down);
++  impl_->window.KeyUp(impl_->key_up);
++  impl_->window = nullptr;
++}
++
++void WindowUWP::HandleClosed() {
++  // The system is closing the app; there is no veto.
++  PerformClose();
++}
++
++void WindowUWP::RequestCloseImpl() {
++  // An app cannot close its CoreWindow. Closing ends the message loop, and
++  // the process ends when CoreApplication's Run returns.
++  PerformClose();
++}
++
++void WindowUWP::PerformClose() {
++  WindowDestructionReceiver destruction_receiver(this);
++  OnBeforeClose(destruction_receiver);
++  if (destruction_receiver.IsWindowDestroyed()) {
++    return;
++  }
++  Detach();
++  OnAfterClose();
++}
++
++std::unique_ptr<Surface> WindowUWP::CreateSurfaceImpl(Surface::TypeFlags allowed_types) {
++  if (!impl_->window || !(allowed_types & Surface::kTypeFlag_WinRTCoreWindow)) {
++    return nullptr;
++  }
++  return std::make_unique<WinRTCoreWindowSurface>(
++      static_cast<::IUnknown*>(winrt::get_abi(impl_->window)), this);
++}
++
++void WindowUWP::RequestPaintImpl() {
++  // At most one paint queued at a time; callable from any thread.
++  if (paint_pending_.exchange(true, std::memory_order_acq_rel)) {
++    return;
++  }
++  uwp_app_context().PostToUIThread(
++      [](void* self) { static_cast<WindowUWP*>(self)->HandlePaint(); }, this);
++}
++
++void WindowUWP::HandlePaint() {
++  paint_pending_.store(false, std::memory_order_release);
++  OnPaint();
++}
++
++}  // namespace rex::ui
+diff --git a/src/ui/windowed_app_context_uwp.cpp b/src/ui/windowed_app_context_uwp.cpp
+new file mode 100644
+index 0000000..0717920
+--- /dev/null
++++ b/src/ui/windowed_app_context_uwp.cpp
+@@ -0,0 +1,76 @@
++/**
++ * @file        ui/windowed_app_context_uwp.cpp
++ * @brief       UWP (CoreWindow) implementation of the windowed app UI loop
++ *
++ * @remarks     OpenJam patch for the UWP build (REXGLUE_UWP).
++ */
++
++#include <rex/ui/windowed_app_context_uwp.h>
++
++#include <cstdlib>
++
++#include <winrt/Windows.Foundation.h>
++#include <winrt/Windows.UI.Core.h>
++
++#include <rex/logging.h>
++
++namespace rex::ui {
++
++namespace {
++
++winrt::Windows::UI::Core::CoreWindow AsCoreWindow(::IUnknown* abi) {
++  winrt::Windows::UI::Core::CoreWindow window{nullptr};
++  winrt::copy_from_abi(window, abi);
++  return window;
++}
++
++}  // namespace
++
++UWPWindowedAppContext::UWPWindowedAppContext(::IUnknown* core_window)
++    : core_window_(core_window) {
++  core_window_->AddRef();
++}
++
++UWPWindowedAppContext::~UWPWindowedAppContext() {
++  // Leftover pending functions run before the loop machinery goes away, as
++  // the WindowedAppContext shutdown contract asks.
++  ExecutePendingFunctionsFromUIThread();
++  core_window_->Release();
++}
++
++void UWPWindowedAppContext::PostToUIThread(void (*function)(void*), void* data) {
++  try {
++    AsCoreWindow(core_window_)
++        .Dispatcher()
++        .RunAsync(winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
++                  [function, data]() { function(data); });
++  } catch (const winrt::hresult_error& e) {
++    REXLOG_ERROR("UWPWindowedAppContext: RunAsync failed: {:08X}", uint32_t(e.code().value));
++  }
++}
++
++void UWPWindowedAppContext::NotifyUILoopOfPendingFunctions() {
++  // Thread-safe by the dispatcher's contract; wakes ProcessEvents below.
++  PostToUIThread(
++      [](void* self) {
++        static_cast<UWPWindowedAppContext*>(self)->ExecutePendingFunctionsFromUIThread();
++      },
++      this);
++}
++
++void UWPWindowedAppContext::PlatformQuitFromUIThread() {
++  // RunMainMessageLoop re-checks HasQuitFromUIThread after each wake.
++  NotifyUILoopOfPendingFunctions();
++}
++
++int UWPWindowedAppContext::RunMainMessageLoop() {
++  auto dispatcher = AsCoreWindow(core_window_).Dispatcher();
++  while (!HasQuitFromUIThread()) {
++    // Blocks until there is at least one event, then drains the queue.
++    dispatcher.ProcessEvents(
++        winrt::Windows::UI::Core::CoreProcessEventsOption::ProcessOneAndAllPending);
++  }
++  return EXIT_SUCCESS;
++}
++
++}  // namespace rex::ui
+diff --git a/src/ui/windowed_app_main_uwp.cpp b/src/ui/windowed_app_main_uwp.cpp
+new file mode 100644
+index 0000000..65b9e40
+--- /dev/null
++++ b/src/ui/windowed_app_main_uwp.cpp
+@@ -0,0 +1,77 @@
++/**
++ * @file        ui/windowed_app_main_uwp.cpp
++ * @brief       Entry point for windowed applications as a UWP app (Xbox One)
++ *
++ * @remarks     OpenJam patch for the UWP build (REXGLUE_UWP), standing in for
++ *              windowed_app_main_sdl.cpp. Compiled into the host executable.
++ */
++
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#include <windows.h>
++
++#include <cstdlib>
++#include <map>
++#include <memory>
++#include <string>
++
++#include <winrt/Windows.ApplicationModel.Core.h>
++#include <winrt/Windows.Foundation.h>
++#include <winrt/Windows.UI.Core.h>
++
++#include <rex/cvar.h>
++#include <rex/logging.h>
++#include <rex/ui/windowed_app.h>
++#include <rex/ui/windowed_app_context_uwp.h>
++
++namespace {
++
++using namespace winrt::Windows::ApplicationModel::Core;
++using winrt::Windows::UI::Core::CoreWindow;
++
++// An app has no command line. Everything that would be passed on one comes
++// from the app's own defaults (ReXApp::OnPreSetup) or a config file.
++int RunWindowedApp(::IUnknown* core_window) {
++  char arg0[] = "app";
++  char* argv[] = {arg0, nullptr};
++  rex::cvar::Init(1, argv);
++  rex::cvar::ApplyEnvironment();
++  rex::InitLoggingEarly();
++
++  int result;
++  {
++    rex::ui::UWPWindowedAppContext app_context(core_window);
++    std::unique_ptr<rex::ui::WindowedApp> app = rex::ui::GetWindowedAppCreator()(app_context);
++    app->SetParsedArguments(std::map<std::string, std::string>{});
++    result = app->OnInitialize() ? app_context.RunMainMessageLoop() : EXIT_FAILURE;
++    app->InvokeOnDestroy();
++  }
++  return result;
++}
++
++struct View : winrt::implements<View, IFrameworkViewSource, IFrameworkView> {
++  IFrameworkView CreateView() { return *this; }
++  void Initialize(CoreApplicationView const&) {}
++  void Load(winrt::hstring const&) {}
++  void Uninitialize() {}
++  void SetWindow(CoreWindow const& window) { window_ = window; }
++
++  void Run() {
++    window_.Activate();
++    RunWindowedApp(static_cast<::IUnknown*>(winrt::get_abi(window_)));
++    // Leaving Run ends the app.
++  }
++
++  CoreWindow window_{nullptr};
++};
++
++}  // namespace
++
++int WINAPI wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
++  CoreApplication::Run(winrt::make<View>());
++  return 0;
++}
+diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
+index f102b56..c3262d9 100644
+--- a/thirdparty/CMakeLists.txt
++++ b/thirdparty/CMakeLists.txt
+@@ -244,6 +244,7 @@ target_compile_options(imgui PRIVATE -w)
+ #=============================================================================
+ # SDL3 - Cross-platform media layer
+ #=============================================================================
++if(NOT REXGLUE_UWP)  # OpenJam: no SDL3 in a UWP build
+ set(SDL_INSTALL ON CACHE BOOL "" FORCE)
+ set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+ set(SDL_STATIC ON CACHE BOOL "" FORCE)
+@@ -302,6 +303,7 @@ if(UNIX AND NOT APPLE)
+ endif()
+ 
+ add_subdirectory(sdl3)
++endif()  # NOT REXGLUE_UWP
+ 
+ #=============================================================================
+ # DXC API headers (vendored from DirectXShaderCompiler, runtime-loaded)

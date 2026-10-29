@@ -19,7 +19,11 @@ env:
   CONFIG: RelWithDebInfo
 
 jobs:
-  build:
+  # The SDK as ordinary Windows code with the patches applied, and the game
+  # against it: the patches must not change the PC build. Started by hand,
+  # since it is a long one and the PC build rarely needs re-proving.
+  desktop:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 360
     defaults:
@@ -132,4 +136,85 @@ jobs:
         with:
           name: nbajam_ofe-windows-sdk-from-source
           path: ${{ runner.temp }}/nbajam_ofe
+          retention-days: 7
+
+  # The SDK built for the Xbox (REXGLUE_UWP=ON). Keeps going past errors so
+  # one run reports all of them, then lists which Windows DLLs the runtime
+  # imports, to check against what the smoke test found on the console.
+  uwp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ReXGlue source
+        run: |
+          git clone --depth 1 --branch $env:REXGLUE_TAG --recurse-submodules --shallow-submodules `
+            https://github.com/rexglue/rexglue-sdk $env:SDK_DIR
+          if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+
+      - name: Apply Xbox patches
+        run: |
+          $patches = Get-ChildItem xbox/rexglue/patches -Filter *.patch | Sort-Object Name
+          foreach ($p in $patches) {
+            Write-Host "applying $($p.Name)"
+            git -C $env:SDK_DIR apply --whitespace=nowarn $p.FullName
+            if ($LASTEXITCODE -ne 0) { throw "$($p.Name) does not apply" }
+          }
+
+      - name: Toolchain
+        run: |
+          choco install ninja -y --no-progress
+          "C:\Program Files\LLVM\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2.22
+        with:
+          variant: sccache
+          key: xbox-rexglue-uwp-${{ env.REXGLUE_TAG }}
+
+      - name: Configure SDK (UWP)
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          cmake --preset win-amd64 -B out/build/uwp `
+            -DREXGLUE_UWP=ON `
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ `
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
+            "-DCMAKE_INSTALL_PREFIX=$((Get-Location).Path)/out/install/uwp" `
+            "-DCMAKE_CONFIGURATION_TYPES=$env:CONFIG" "-DCMAKE_DEFAULT_BUILD_TYPE=$env:CONFIG" `
+            "-DCMAKE_CROSS_CONFIGS=$env:CONFIG" "-DCMAKE_DEFAULT_CONFIGS=$env:CONFIG"
+          if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+
+      - name: Build SDK (UWP)
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          cmake --build out/build/uwp --config $env:CONFIG --target install --parallel -- -k 0 2>&1 |
+            Tee-Object -FilePath "$env:RUNNER_TEMP/uwp-build.log"
+          $code = $LASTEXITCODE
+          Write-Host "===== errors ====="
+          Select-String -Path "$env:RUNNER_TEMP/uwp-build.log" -Pattern "error:|error LNK|undefined symbol" |
+            ForEach-Object { $_.Line } | Sort-Object -Unique | Select-Object -First 200
+          if ($code -ne 0) { throw "build failed" }
+
+      - name: What the runtime imports
+        if: always()
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          Get-ChildItem out/build/uwp -Recurse -Include *.dll, rexglue.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch "CMakeFiles" } | ForEach-Object {
+              Write-Host "== $($_.Name)"
+              dumpbin /dependents $_.FullName | Select-String -Pattern "\.dll" | ForEach-Object { "   " + $_.Line.Trim() }
+            }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rexglue-uwp
+          path: ${{ env.SDK_DIR }}/out/install/uwp
           retention-days: 7
