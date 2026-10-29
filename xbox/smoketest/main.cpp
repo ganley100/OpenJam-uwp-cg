@@ -244,6 +244,16 @@ bool TestCommit(size_t c) {
 
 // --- 3. recovering from an access violation ---------------------------------
 
+// Not declared for apps: the SDK keeps these to the desktop partition. The
+// functions themselves live in kernelbase on every Windows 10, so they are
+// declared here to find out whether the console lets an app call them.
+// ReXGlue's MMIO handler (GPU register emulation) cannot work without them.
+using VehHandler = LONG(NTAPI*)(EXCEPTION_POINTERS*);
+extern "C" __declspec(dllimport) PVOID WINAPI
+AddVectoredExceptionHandler(ULONG first, VehHandler handler);
+extern "C" __declspec(dllimport) ULONG WINAPI
+RemoveVectoredExceptionHandler(PVOID handle);
+
 uint8_t* g_trap_page = nullptr;
 std::atomic<int> g_trap_hits{0};
 
