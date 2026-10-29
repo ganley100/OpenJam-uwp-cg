@@ -50,6 +50,7 @@
 #include <iterator>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "font5x7.h"
@@ -576,6 +577,15 @@ extern "C" __declspec(dllimport) DWORD WINAPI GetModuleFileNameA(HMODULE module,
 
 size_t g_load_check = SIZE_MAX;
 std::atomic<int> g_load_faults{0};
+// While a DLL is loading, when it started: the screen's loop uses it to say
+// how long it has been, so a load that never finishes shows as one.
+std::atomic<int64_t> g_loading_since_ms{0};
+
+int64_t NowMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
 
 // A C++ exception carries its type in the ThrowInfo the compiler emits; on
 // x64 every pointer in it is an offset from the throwing module's base.
@@ -723,12 +733,14 @@ bool TestPackageDlls(size_t c) {
     for (wchar_t ch : name) narrow += char(ch);
     Note(c, "loading %s ...", narrow.c_str());
     WriteReport();
+    g_loading_since_ms = NowMs();
     HMODULE m = LoadPackagedLibrary(name.c_str(), 0);
+    const int64_t took = NowMs() - g_loading_since_ms.exchange(0);
     const DWORD err = m ? 0 : GetLastError();
     {
       std::lock_guard<std::mutex> guard(g_lock);
       g_checks[c].detail.back() =
-          m ? narrow + ": loaded"
+          m ? narrow + ": loaded in " + std::to_string(took) + " ms"
             : narrow + ": FAILED, error " + std::to_string(err) +
                   (err == 126 ? " (a DLL it needs is missing)"
                    : err == 127 ? " (a function it needs is missing)"
@@ -949,13 +961,20 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
     WriteReport();
     Finish(imports, TestImports(imports) ? State::kPass : State::kFail);
     WriteReport();
-    Finish(game_dlls, TestPackageDlls(game_dlls) ? State::kPass : State::kFail);
-    WriteReport();
 
     Gpu gpu;
     const bool have_gpu = InitGpu(gpu, window_, gpu_check);
     Finish(gpu_check, have_gpu ? State::kPass : State::kFail);
     WriteReport();
+
+    // The game's DLLs load last, on their own thread, with the screen up and
+    // being redrawn: a load that hangs then shows as one, counting up, rather
+    // than as an app the console closes for not responding.
+    std::thread([game_dlls] {
+      Finish(game_dlls, TestPackageDlls(game_dlls) ? State::kPass : State::kFail);
+      WriteReport();
+    }).detach();
+    int64_t last_tick = 0;
 
     bool pad_seen = false;
     while (!closed_) {
@@ -971,6 +990,16 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
           Finish(pad, State::kPass);
           WriteReport();
         }
+      }
+      if (const int64_t since = g_loading_since_ms.load(); since && NowMs() - last_tick >= 1000) {
+        last_tick = NowMs();
+        {
+          std::lock_guard<std::mutex> guard(g_lock);
+          auto& line = g_checks[game_dlls].detail.back();
+          line = line.substr(0, line.find(" ...")) + " ... still loading after " +
+                 std::to_string((last_tick - since) / 1000) + " s";
+        }
+        WriteReport();
       }
       if (have_gpu) {
         DrawReport();
