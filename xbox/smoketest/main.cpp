@@ -704,6 +704,26 @@ bool TestPackageDlls(size_t c) {
   std::sort(names.begin(), names.end(), [&](const auto& a, const auto& b) {
     return rank(a) != rank(b) ? rank(a) < rank(b) : a < b;
   });
+  // rexruntime.dll (with patch 0005) writes a line per C++ initializer to
+  // this file before running it. What the last run left is shown first: the
+  // last line of it is what killed that run.
+  const fs::path init_trail = g_local / "rexinit.txt";
+  {
+    std::ifstream prev(init_trail);
+    std::vector<std::string> lines;
+    for (std::string l; std::getline(prev, l);) {
+      if (!l.empty() && l.back() == '\r') l.pop_back();
+      lines.push_back(l);
+    }
+    if (!lines.empty()) {
+      Note(c, "last run's rexinit.txt, %zu line(s), ending:", lines.size());
+      for (size_t i = lines.size() > 3 ? lines.size() - 3 : 0; i < lines.size(); ++i) {
+        Note(c, "  %s", lines[i].c_str());
+      }
+    }
+  }
+  SetEnvironmentVariableW(L"OPENJAM_INIT_TRAIL", init_trail.wstring().c_str());
+
   g_load_check = c;
   void* recorder = AddVectoredExceptionHandler(1, RecordLoadFault);
   // The ways a DLL's startup can end the process without a fault: an

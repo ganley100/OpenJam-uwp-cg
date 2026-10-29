@@ -1,0 +1,106 @@
+diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
+index 1ddafd0..d545b07 100644
+--- a/src/core/CMakeLists.txt
++++ b/src/core/CMakeLists.txt
+@@ -52,6 +52,10 @@ if(WIN32)
+         system_win.cpp
+         threading_win.cpp
+     )
++    if(REXGLUE_UWP)
++        # OpenJam: names the initializer that kills the runtime as it loads.
++        target_sources(rexcore PRIVATE uwp_init_trail.cpp)
++    endif()
+     target_compile_definitions(rexcore PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+ elseif(UNIX)
+     # Linux and macOS/Darwin share the POSIX sources; Darwin-specific behavior
+diff --git a/src/core/uwp_init_trail.cpp b/src/core/uwp_init_trail.cpp
+new file mode 100644
+index 0000000..679ce34
+--- /dev/null
++++ b/src/core/uwp_init_trail.cpp
+@@ -0,0 +1,85 @@
++/**
++ * @file        core/uwp_init_trail.cpp
++ * @brief       Names the static initializer that kills the runtime as it loads
++ *
++ * @remarks     OpenJam patch for the UWP build (REXGLUE_UWP). On the Xbox, the
++ *              runtime DLL ends the process while it loads, leaving nothing
++ *              behind. This runs first among the module's C++ initializers and,
++ *              if OPENJAM_INIT_TRAIL names a file, runs the rest itself, one at
++ *              a time, writing each one's offset in the module to that file
++ *              first. The last line is then the one that did it. Without the
++ *              variable it does nothing and the CRT runs them as usual.
++ */
++
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++
++#include <cstdio>
++#include <cstring>
++
++namespace {
++
++using Initializer = void(__cdecl*)();
++
++void InitTrail();
++
++// .CRT$XC* sections are merged in name order: XCA (the CRT's start marker),
++// then this, then every compiler-emitted initializer (XCU), then the end
++// marker here, then XCZ.
++#pragma section(".CRT$XCB", read)
++#pragma section(".CRT$XCYZ", read)
++__declspec(allocate(".CRT$XCB")) __attribute__((used)) Initializer g_first = InitTrail;
++__declspec(allocate(".CRT$XCYZ")) __attribute__((used)) Initializer g_last = nullptr;
++
++HANDLE g_file = INVALID_HANDLE_VALUE;
++
++void Write(const char* text) {
++  DWORD written = 0;
++  WriteFile(g_file, text, DWORD(strlen(text)), &written, nullptr);
++  FlushFileBuffers(g_file);
++}
++
++void InitTrail() {
++  wchar_t path[MAX_PATH];
++  if (!GetEnvironmentVariableW(L"OPENJAM_INIT_TRAIL", path, MAX_PATH)) {
++    return;
++  }
++  g_file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
++                       FILE_ATTRIBUTE_NORMAL, nullptr);
++  if (g_file == INVALID_HANDLE_VALUE) {
++    return;
++  }
++  HMODULE self = nullptr;
++  GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                         GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                     reinterpret_cast<LPCWSTR>(&InitTrail), &self);
++  const auto base = reinterpret_cast<uintptr_t>(self);
++  Initializer* begin = &g_first + 1;
++  Initializer* end = &g_last;
++  char line[128];
++  std::snprintf(line, sizeof(line), "rexruntime: %zu initializer slots, base %p\r\n",
++                size_t(end - begin), self);
++  Write(line);
++  // The table is read-only once loaded; open it so each entry can be cleared
++  // after it runs, and the CRT does not run it a second time.
++  DWORD old = 0;
++  VirtualProtect(begin, size_t(end - begin) * sizeof(Initializer), PAGE_READWRITE, &old);
++  for (Initializer* p = begin; p < end; ++p) {
++    if (!*p) {
++      continue;
++    }
++    std::snprintf(line, sizeof(line), "init +0x%llX\r\n",
++                  static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(*p) - base));
++    Write(line);
++    Initializer fn = *p;
++    *p = nullptr;
++    fn();
++  }
++  VirtualProtect(begin, size_t(end - begin) * sizeof(Initializer), old, &old);
++  Write("rexruntime: every initializer ran\r\n");
++  CloseHandle(g_file);
++}
++
++}  // namespace
