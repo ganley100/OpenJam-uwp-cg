@@ -70,22 +70,12 @@ jobs:
           # generated/ is untracked; `rexglue init` writes the SDK integration
           # script. Init a scratch project and take only that file.
           rexglue --version
-          rexglue init --help
           $tmp = "$env:RUNNER_TEMP\initproj"
           $xex = Join-Path (Split-Path -Parent $env:GITHUB_WORKSPACE) "Root\default.xex"
-          $attempts = @(
-            @('init', '--app_name', 'nbajam_ofe', '--app_root', $tmp, '--force'),
-            @('init', '--project-name', 'nbajam_ofe', '--xex-path', $xex, '--app_root', $tmp, '--force'),
-            @('init', '--project-name', 'nbajam_ofe', '--xex-path', $xex, '--output', $tmp, '--force')
-          )
-          foreach ($a in $attempts) {
-            Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-            Write-Host "> rexglue $($a -join ' ')"
-            & rexglue @a
-            $found = Get-ChildItem $tmp -Recurse -Filter rexglue.cmake -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) { break }
-          }
-          if (-not $found) { throw "rexglue init did not produce generated/rexglue.cmake" }
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          rexglue init --project-name nbajam_ofe --xex-path $xex --project-root $tmp
+          $found = Get-ChildItem $tmp -Recurse -Filter rexglue.cmake -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $found) { Get-ChildItem $tmp -Recurse | Select-Object FullName; throw "rexglue init did not produce generated/rexglue.cmake" }
           New-Item -ItemType Directory -Force generated | Out-Null
           Copy-Item $found.FullName generated/rexglue.cmake
           # This project's codegen output lives in generated/default
