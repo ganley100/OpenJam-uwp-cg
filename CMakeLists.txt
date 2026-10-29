@@ -15,6 +15,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(generated/rexglue.cmake)
 
+# The codegen tool runs on the build machine, so an Xbox build (whose SDK is a
+# UWP build) can be pointed at an ordinary desktop rexglue.exe instead.
+set(NBAJAM_CODEGEN_CLI "" CACHE FILEPATH "rexglue.exe to run codegen with, instead of the SDK's own")
+if(NBAJAM_CODEGEN_CLI AND TARGET rex::rexglue)
+    set_target_properties(rex::rexglue PROPERTIES
+        IMPORTED_LOCATION "${NBAJAM_CODEGEN_CLI}"
+        IMPORTED_LOCATION_RELEASE "${NBAJAM_CODEGEN_CLI}")
+endif()
+
 # Sources
 option(REXPORT_CRASH_REPORT "Resolve guest call stacks on access violations" ON)
 option(REXPORT_GUEST_PROFILER "Sampling profiler for locating guest code" ON)

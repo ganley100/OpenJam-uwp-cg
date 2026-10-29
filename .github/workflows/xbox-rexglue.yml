@@ -213,10 +213,23 @@ jobs:
         run: |
           $prefix = (Resolve-Path "$env:SDK_DIR/out/install/uwp").Path
           "REXGLUE_PREFIX=$prefix" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          # A console tool, so it runs here even from the UWP build.
-          $cli = Get-Item "$prefix/bin/rexglue.exe" -ErrorAction SilentlyContinue
-          if (-not $cli) { Get-ChildItem "$prefix/bin"; throw "the rexglue CLI was not installed" }
+          # The UWP build's own CLI crashes on start (0xC0000409); recorded
+          # here, since whatever does it may also matter on the console.
+          $uwpcli = "$prefix/bin/rexglue.exe"
+          if (Test-Path $uwpcli) {
+            Write-Host "UWP-built CLI, --help:"
+            & $uwpcli --help 2>&1 | Select-Object -First 15
+            Write-Host "exit code $LASTEXITCODE"
+          }
+          # Codegen runs on this machine, so it uses the released desktop CLI.
+          $zip = "$env:RUNNER_TEMP\rexglue-desktop.zip"
+          Invoke-WebRequest -UseBasicParsing -OutFile $zip `
+            "https://github.com/rexglue/rexglue-sdk/releases/download/$env:REXGLUE_TAG/rexglue-sdk-$($env:REXGLUE_TAG.TrimStart('v'))-win-amd64.zip"
+          Expand-Archive $zip "$env:RUNNER_TEMP\rexglue-desktop"
+          $cli = Get-ChildItem "$env:RUNNER_TEMP\rexglue-desktop" -Recurse -Filter rexglue.exe | Select-Object -First 1
+          if (-not $cli) { throw "rexglue.exe not in the desktop SDK" }
           "REXGLUE_CLI=$($cli.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          $global:LASTEXITCODE = 0
 
       # The game, as the Xbox app (NBAJAM_UWP), against that SDK.
       - name: Game executable
@@ -240,7 +253,7 @@ jobs:
       - name: Configure game (UWP)
         run: |
           cmake -S . -B out/build/game-uwp -G Ninja "-DCMAKE_BUILD_TYPE=$env:CONFIG" `
-            -DNBAJAM_UWP=ON `
+            -DNBAJAM_UWP=ON "-DNBAJAM_CODEGEN_CLI=$env:REXGLUE_CLI" `
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ `
             -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
             "-DCMAKE_PREFIX_PATH=$env:REXGLUE_PREFIX"
