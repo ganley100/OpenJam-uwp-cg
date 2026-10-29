@@ -334,6 +334,8 @@ jobs:
           New-Item -ItemType Directory -Force out/maps | Out-Null
           Get-ChildItem "$env:SDK_DIR/out" -Recurse -Filter *.map -ErrorAction SilentlyContinue |
             Copy-Item -Destination out/maps
+          Get-ChildItem out/build/game-uwp -Filter *.map -ErrorAction SilentlyContinue |
+            Copy-Item -Destination out/maps
           Get-ChildItem out/maps
           # Each DLL's DllMain must be its own or the CRT's. xinputuap.lib
           # exports one, and a DLL that took it called XINPUTUAP's DllMain as

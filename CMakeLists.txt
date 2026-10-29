@@ -99,6 +99,9 @@ if(NBAJAM_UWP)
     # /APPCONTAINER and WindowsApp.lib. The desktop C++ runtime DLLs ship
     # inside the package (xbox/game/package.ps1).
     target_compile_definitions(nbajam_ofe PRIVATE NBAJAM_UWP=1)
+    # A linker map, so a native return address in a log names the recompiled
+    # guest function (sub_<address>) it is in.
+    target_link_options(nbajam_ofe PRIVATE "LINKER:/MAP")
     # xinputuap.lib is XInput 1.4 as an app links it.
     target_link_libraries(nbajam_ofe PRIVATE xinputuap.lib)
 endif()

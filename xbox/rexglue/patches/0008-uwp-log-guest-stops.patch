@@ -1,0 +1,107 @@
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_debug.cpp b/src/kernel/xboxkrnl/xboxkrnl_debug.cpp
+index 670c446..7ce4f9f 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_debug.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_debug.cpp
+@@ -22,10 +22,59 @@
+ #include <rex/system/xthread.h>
+ #include <rex/system/xtypes.h>
+ 
++#if REXGLUE_UWP
++#include <windows.h>
++
++#include <cstring>
++#include <string>
++
++#include <rex/system/thread_state.h>
++#endif
++
+ namespace rex::kernel::xboxkrnl {
+ using namespace rex::system;
+ 
++#if REXGLUE_UWP
++// OpenJam: on the console nothing is attached to catch a break, so the game
++// simply closes. Say what stopped it, from where, and flush the log first.
++// The native frames are recompiled guest functions (sub_<address>) in the
++// host executable; its linker map names them.
++void LogGuestStop(const std::string& what) {
++  std::string trace;
++  void* frames[16]{};
++  const USHORT n = RtlCaptureStackBackTrace(1, 16, frames, nullptr);
++  for (USHORT i = 0; i < n; ++i) {
++    HMODULE module = nullptr;
++    char name[MAX_PATH] = "?";
++    uintptr_t offset = 0;
++    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                           static_cast<LPCSTR>(frames[i]), &module) &&
++        module) {
++      GetModuleFileNameA(module, name, MAX_PATH);
++      offset = reinterpret_cast<uintptr_t>(frames[i]) - reinterpret_cast<uintptr_t>(module);
++    }
++    const char* base = strrchr(name, '\\');
++    trace += fmt::format(" {}+0x{:X}", base ? base + 1 : name, offset);
++  }
++  uint32_t lr = 0;
++  if (auto* ts = rex::runtime::ThreadState::Get()) {
++    lr = uint32_t(ts->context()->lr);
++  }
++  REXKRNL_ERROR("GUEST STOP: {} (guest lr {:08X}); native stack:{}", what, lr, trace);
++  rex::FlushLogging();
++}
++#endif
++
+ void DbgBreakPoint_entry() {
++#if REXGLUE_UWP
++  // A break with no debugger to take it is an assertion the game would have
++  // carried on from on a retail console. Log it and carry on.
++  LogGuestStop("DbgBreakPoint (continuing)");
++  if (!rex::debug::IsDebuggerAttached()) {
++    return;
++  }
++#endif
+   rex::debug::Break();
+ }
+ 
+@@ -123,6 +172,20 @@ void HandleCppException(ppc_ptr_t<X_EXCEPTION_RECORD> record) {
+   auto catchable_types = REX_KERNEL_MEMORY()->TranslateVirtual<x_s__CatchableTypeArray*>(
+       throw_info->catchable_type_array_ptr);
+ 
++#if REXGLUE_UWP
++  {
++    // The thrown type's decorated name, e.g. ".?AVbad_alloc@std@@".
++    std::string type = "?";
++    if (catchable_types && catchable_types->number_catchable_types > 0) {
++      auto* ct = REX_KERNEL_MEMORY()->TranslateVirtual<x_s__CatchableType*>(
++          catchable_types->catchable_type_ptrs[0]);
++      if (ct && ct->type_ptr) {
++        type = REX_KERNEL_MEMORY()->TranslateVirtual<const char*>(ct->type_ptr + 8);
++      }
++    }
++    LogGuestStop(fmt::format("uncaught guest C++ exception {}", type));
++  }
++#endif
+   rex::debug::Break();
+ }
+ 
+@@ -140,6 +203,9 @@ void RtlRaiseException_entry(ppc_ptr_t<X_EXCEPTION_RECORD> record) {
+ 
+   // TODO(benvanik): unwinding.
+   // This is going to suck.
++#if REXGLUE_UWP
++  LogGuestStop(fmt::format("RtlRaiseException 0x{:08X}", uint32_t(record->code)));
++#endif
+   rex::debug::Break();
+ }
+ 
+@@ -147,6 +213,11 @@ void KeBugCheckEx_entry(u32 code, u32 param1, u32 param2, u32 param3, u32 param4
+   REXKRNL_DEBUG("*** STOP: 0x{:08X} (0x{:08X}, 0x{:08X}, 0x{:08X}, 0x{:08X})", code, param1, param2,
+                 param3, param4);
+   fflush(stdout);
++#if REXGLUE_UWP
++  LogGuestStop(fmt::format("KeBugCheckEx 0x{:08X} (0x{:08X}, 0x{:08X}, 0x{:08X}, 0x{:08X})",
++                           uint32_t(code), uint32_t(param1), uint32_t(param2), uint32_t(param3),
++                           uint32_t(param4)));
++#endif
+   rex::debug::Break();
+   assert_always();
+ }
