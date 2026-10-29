@@ -13,14 +13,20 @@
 
 #include <windows.h>
 
+// DbgHelp is a desktop library and may not be on the console, where a
+// missing DLL stops the app before it starts; the Xbox build logs addresses.
+#if !NBAJAM_UWP
 #include <dbghelp.h>
+#endif
 
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
 #include <string>
 
+#if !NBAJAM_UWP
 #pragma comment(lib, "dbghelp.lib")
+#endif
 
 namespace {
 
@@ -87,6 +93,13 @@ const char* Backing(uint32_t guest) {
 // so this is best-effort and never allowed to take the process with it.
 void EmitStack() {
   __try {
+#if NBAJAM_UWP
+    void* frames[32]{};
+    USHORT n = RtlCaptureStackBackTrace(1, 32, frames, nullptr);
+    for (USHORT i = 0; i < n && i < 18; ++i) {
+      Emit("    [%2d] 0x%p\n", i, frames[i]);
+    }
+#else
     static bool inited = false;
     if (!inited) {
       SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_UNDNAME);
@@ -107,6 +120,7 @@ void EmitStack() {
         Emit("    [%2d] 0x%p\n", i, frames[i]);
       }
     }
+#endif
   } __except (EXCEPTION_EXECUTE_HANDLER) {
     Emit("    <stack walk failed>\n");
   }
