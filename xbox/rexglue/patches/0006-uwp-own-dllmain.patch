@@ -1,0 +1,42 @@
+diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
+index d545b07..20aa0ef 100644
+--- a/src/core/CMakeLists.txt
++++ b/src/core/CMakeLists.txt
+@@ -55,6 +55,8 @@ if(WIN32)
+     if(REXGLUE_UWP)
+         # OpenJam: names the initializer that kills the runtime as it loads.
+         target_sources(rexcore PRIVATE uwp_init_trail.cpp)
++        # OpenJam: the runtime's own DllMain, so XINPUTUAP's is not used.
++        target_sources(rexcore PRIVATE uwp_dllmain.cpp)
+     endif()
+     target_compile_definitions(rexcore PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+ elseif(UNIX)
+diff --git a/src/core/uwp_dllmain.cpp b/src/core/uwp_dllmain.cpp
+new file mode 100644
+index 0000000..1cd2b08
+--- /dev/null
++++ b/src/core/uwp_dllmain.cpp
+@@ -0,0 +1,23 @@
++/**
++ * @file        core/uwp_dllmain.cpp
++ * @brief       The runtime DLL's own DllMain, for the UWP build
++ *
++ * @remarks     OpenJam patch for the UWP build (REXGLUE_UWP). The CRT's DLL
++ *              entry calls a function named DllMain once the module is
++ *              initialized, and falls back to an empty one from the CRT when
++ *              the module has none. But xinputuap.lib - which a UWP build
++ *              links for XInput - exports a DllMain of its own from
++ *              XINPUTUAP.dll, and the linker found that first. The runtime
++ *              then called XINPUTUAP's DllMain as its own on every load: a
++ *              fast fail on a PC and the app closing on the Xbox. Defining it
++ *              here keeps the linker from looking for one in the libraries.
++ */
++
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++
++extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD, LPVOID) {
++  return TRUE;
++}

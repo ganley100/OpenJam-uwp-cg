@@ -335,6 +335,11 @@ jobs:
           Get-ChildItem "$env:SDK_DIR/out" -Recurse -Filter *.map -ErrorAction SilentlyContinue |
             Copy-Item -Destination out/maps
           Get-ChildItem out/maps
+          # Each DLL's DllMain must be its own or the CRT's. xinputuap.lib
+          # exports one, and a DLL that took it called XINPUTUAP's DllMain as
+          # its own on every load - the app closing on the console.
+          $bad = Select-String -Path out/maps/*.map -Pattern "^\s*\S+\s+DllMain\s+\S+\s+xinputuap"
+          if ($bad) { $bad | ForEach-Object { $_.Line }; throw "a DLL's DllMain comes from xinputuap.lib" }
 
       - uses: actions/upload-artifact@v4
         if: always()
