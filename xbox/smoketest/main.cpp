@@ -15,6 +15,9 @@
 //   4. Direct3D 12, and what the GPU supports.
 //   5. The controller, through XInput as the runtime reads it.
 //   6. Writing to LocalState and reading files out of the package.
+//   7. Which ordinary Windows DLLs exist on the console. If the ones ReXGlue
+//      and its libraries already use are there, most of the SDK can stay
+//      ordinary Windows code and only the window has to change.
 //
 // Results are drawn on the TV and written to LocalState\report.txt, which
 // Device Portal's File Explorer can open.
@@ -292,6 +295,57 @@ bool TestTrap(size_t c) {
   Note(c, "fault caught %d time(s), write survived: %s", g_trap_hits.load(),
        v == 0x1234 ? "yes" : "no");
   return g_trap_hits.load() == 1 && v == 0x1234;
+}
+
+// --- 7. which Windows DLLs exist -------------------------------------------
+
+// Desktop-only, like the exception handler calls above; linked from
+// kernel32.lib to find out whether the console has them.
+extern "C" __declspec(dllimport) HMODULE WINAPI LoadLibraryW(LPCWSTR name);
+extern "C" __declspec(dllimport) BOOL WINAPI FreeLibrary(HMODULE module);
+
+bool TestDlls(size_t c) {
+  // What ReXGlue v0.10.0, SDL3, FFmpeg and the game import between them,
+  // plus the two that would replace SDL for sound and the pad.
+  static const wchar_t* const kDlls[] = {
+      L"kernel32.dll", L"user32.dll",   L"gdi32.dll",    L"shell32.dll",
+      L"advapi32.dll", L"ole32.dll",    L"oleaut32.dll", L"dbghelp.dll",
+      L"winmm.dll",    L"ws2_32.dll",   L"bcrypt.dll",   L"version.dll",
+      L"setupapi.dll", L"imm32.dll",    L"hid.dll",      L"d3d12.dll",
+      L"dxgi.dll",     L"D3DCompiler_47.dll", L"dxcompiler.dll",
+      L"dxilconv.dll", L"xinput1_4.dll", L"xaudio2_9.dll"};
+  std::string have, missing;
+  for (const wchar_t* name : kDlls) {
+    std::string narrow;
+    for (const wchar_t* p = name; *p; ++p) narrow += char(*p);
+    HMODULE m = LoadLibraryW(name);
+    if (m) {
+      FreeLibrary(m);
+      have += (have.empty() ? "" : " ") + narrow;
+    } else {
+      missing += (missing.empty() ? "" : " ") + narrow + "(" +
+                 std::to_string(GetLastError()) + ")";
+    }
+  }
+  // Long lists, so wrapped to the screen.
+  auto wrap = [&](const char* label, const std::string& list) {
+    std::string line = label;
+    for (size_t at = 0; at < list.size();) {
+      size_t sp = list.find(' ', at);
+      const std::string word =
+          list.substr(at, sp == std::string::npos ? std::string::npos : sp - at);
+      if (line.size() + word.size() + 1 > 90) {
+        Note(c, "%s", line.c_str());
+        line = "  ";
+      }
+      line += " " + word;
+      at = sp == std::string::npos ? list.size() : sp + 1;
+    }
+    Note(c, "%s", line.c_str());
+  };
+  wrap("present:", have.empty() ? "none" : have);
+  wrap("missing:", missing.empty() ? "none" : missing);
+  return !have.empty();
 }
 
 // --- 6. files ---------------------------------------------------------------
@@ -587,11 +641,13 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
     const size_t trap = AddCheck("Recovering from an access violation");
     const size_t gpu_check = AddCheck("Direct3D 12 on the CoreWindow");
     const size_t pad = AddCheck("Controller (press any button)");
+    const size_t dlls = AddCheck("Windows DLLs on the console");
 
     Finish(files, TestFiles(files) ? State::kPass : State::kFail);
     Finish(arena, TestArena(arena) ? State::kPass : State::kFail);
     Finish(commit, TestCommit(commit) ? State::kPass : State::kFail);
     Finish(trap, TestTrap(trap) ? State::kPass : State::kFail);
+    Finish(dlls, TestDlls(dlls) ? State::kInfo : State::kFail);
     WriteReport();
 
     Gpu gpu;

@@ -26,4 +26,5 @@ target_compile_definitions(smoketest PRIVATE
     UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(smoketest PRIVATE /EHsc /W3)
 target_link_options(smoketest PRIVATE /APPCONTAINER)
-target_link_libraries(smoketest PRIVATE d3d12.lib dxgi.lib xinputuap.lib)
+# kernel32.lib only for the desktop calls the DLL check declares itself.
+target_link_libraries(smoketest PRIVATE d3d12.lib dxgi.lib xinputuap.lib kernel32.lib)
