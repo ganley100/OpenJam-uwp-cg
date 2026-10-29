@@ -1,0 +1,135 @@
+# Builds ReXGlue v0.10.0 from source with the Xbox patches in
+# xbox/rexglue/patches applied, then the game against it. See
+# xbox/rexglue/README.md.
+
+name: Xbox ReXGlue
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "xbox/rexglue/**"
+      - ".github/workflows/xbox-rexglue.yml"
+
+env:
+  REXGLUE_TAG: v0.10.0
+  SDK_DIR: ${{ github.workspace }}/../rexglue-sdk
+  # One configuration, not the SDK preset's three: it is the one the game uses.
+  CONFIG: RelWithDebInfo
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ReXGlue source
+        run: |
+          git clone --depth 1 --branch $env:REXGLUE_TAG --recurse-submodules --shallow-submodules `
+            https://github.com/rexglue/rexglue-sdk $env:SDK_DIR
+          if ($LASTEXITCODE -ne 0) { throw "clone failed" }
+
+      - name: Apply Xbox patches
+        run: |
+          $patches = Get-ChildItem xbox/rexglue/patches -Filter *.patch | Sort-Object Name
+          foreach ($p in $patches) {
+            Write-Host "applying $($p.Name)"
+            git -C $env:SDK_DIR apply --whitespace=nowarn $p.FullName
+            if ($LASTEXITCODE -ne 0) { throw "$($p.Name) does not apply" }
+          }
+          Write-Host "$($patches.Count) patch(es) applied"
+
+      - name: Toolchain
+        run: |
+          choco install ninja -y --no-progress
+          "C:\Program Files\LLVM\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2.22
+        with:
+          variant: sccache
+          key: xbox-rexglue-${{ env.REXGLUE_TAG }}
+
+      - name: Configure SDK
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          cmake --preset win-amd64 `
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ `
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
+            "-DCMAKE_CONFIGURATION_TYPES=$env:CONFIG" "-DCMAKE_DEFAULT_BUILD_TYPE=$env:CONFIG" `
+            "-DCMAKE_CROSS_CONFIGS=$env:CONFIG" "-DCMAKE_DEFAULT_CONFIGS=$env:CONFIG"
+          if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+
+      - name: Build SDK
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          cmake --build out/build/win-amd64 --config $env:CONFIG --target install --parallel
+          if ($LASTEXITCODE -ne 0) { throw "build failed" }
+          $prefix = (Resolve-Path out/install/win-amd64).Path
+          "REXGLUE_PREFIX=$prefix" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "$prefix\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+      # From here on, the same steps as build.yml, against the SDK just built.
+      - name: Game executable
+        run: |
+          $root = Join-Path (Split-Path -Parent $env:GITHUB_WORKSPACE) "Root"
+          New-Item -ItemType Directory -Force $root | Out-Null
+          Copy-Item game/default.xex "$root/default.xex"
+
+      - name: Generate rexglue.cmake
+        run: |
+          $tmp = "$env:RUNNER_TEMP\initproj"
+          $xex = Join-Path (Split-Path -Parent $env:GITHUB_WORKSPACE) "Root\default.xex"
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          rexglue init --project-name nbajam_ofe --xex-path $xex --project-root $tmp
+          $found = Get-ChildItem $tmp -Recurse -Filter rexglue.cmake | Select-Object -First 1
+          if (-not $found) { throw "rexglue init did not produce generated/rexglue.cmake" }
+          New-Item -ItemType Directory -Force generated | Out-Null
+          Copy-Item $found.FullName generated/rexglue.cmake
+
+      - name: Configure game
+        run: |
+          cmake -S . -B out/build/game -G Ninja "-DCMAKE_BUILD_TYPE=$env:CONFIG" `
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ `
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
+            "-DCMAKE_PREFIX_PATH=$env:REXGLUE_PREFIX"
+          if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+
+      - name: Codegen
+        run: |
+          cmake --build out/build/game --target nbajam_ofe_codegen
+          if ($LASTEXITCODE -ne 0) { throw "codegen failed" }
+          cmake -S . -B out/build/game
+
+      - name: Build game
+        run: |
+          cmake --build out/build/game --parallel
+          if ($LASTEXITCODE -ne 0) { throw "build failed" }
+
+      - name: Collect
+        run: |
+          $out = "$env:RUNNER_TEMP\nbajam_ofe"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Get-ChildItem out/build/game -File | Where-Object { $_.Extension -in '.exe', '.dll' } |
+            Copy-Item -Destination $out
+          Copy-Item -Recurse metadata "$out/metadata"
+          Get-ChildItem $out | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nbajam_ofe-windows-sdk-from-source
+          path: ${{ runner.temp }}/nbajam_ofe
+          retention-days: 7
