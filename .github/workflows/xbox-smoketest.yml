@@ -1,0 +1,57 @@
+# Builds the Xbox One smoke test (xbox/smoketest) as a signed .appx, with
+# clang-cl. Install it through Device Portal and photograph what it shows.
+
+name: Xbox smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "xbox/smoketest/**"
+      - "packaging/xbox/Assets/**"
+      - ".github/workflows/xbox-smoketest.yml"
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      # `uwp` selects MSVC's app-container libraries (lib\x64\store).
+      - name: MSVC environment (UWP)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+          uwp: true
+
+      - name: Toolchain
+        run: |
+          "C:\Program Files\LLVM\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          & "C:\Program Files\LLVM\bin\clang-cl.exe" --version
+          Write-Host "LIB=$env:LIB"
+          Get-Command makeappx, signtool | Select-Object Source
+
+      - name: Configure
+        run: cmake -S xbox/smoketest -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang-cl
+
+      - name: Build
+        run: cmake --build build --verbose
+
+      - name: Check the binary is an app
+        run: |
+          dumpbin /headers build/smoketest.exe | Select-String -Pattern "App Container|subsystem"
+          dumpbin /dependents build/smoketest.exe
+
+      - name: Package
+        run: ./xbox/smoketest/package.ps1 -Exe build/smoketest.exe -Out out/appx -Version "1.0.${{ github.run_number }}.0"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openjam-xbox-smoketest
+          path: out/appx
+          retention-days: 30

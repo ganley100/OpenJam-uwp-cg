@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The OpenJam Xbox smoke test. See main.cpp for what it checks. -->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  IgnorableNamespaces="uap">
+
+  <Identity
+    Name="OpenJam.XboxSmokeTest"
+    Publisher="CN=OpenJam"
+    Version="@VERSION@"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>OpenJam Xbox Test</DisplayName>
+    <PublisherDisplayName>OpenJam</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- 17134 (April 2018) is the first with VirtualAlloc2FromApp and
+         MapViewOfFile3FromApp, which the guest memory arena is built with. -->
+    <TargetDeviceFamily Name="Windows.Xbox" MinVersion="10.0.17134.0" MaxVersionTested="10.0.22621.0" />
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17134.0" MaxVersionTested="10.0.22621.0" />
+    <PackageDependency
+      Name="Microsoft.VCLibs.140.00"
+      MinVersion="14.0.30035.0"
+      Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="App" Executable="smoketest.exe" EntryPoint="OpenJam.SmokeTest">
+      <uap:VisualElements
+        DisplayName="OpenJam Xbox Test"
+        Description="Checks what the NBA JAM port needs from an Xbox One in Developer Mode"
+        BackgroundColor="#000000"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" BackgroundColor="#000000" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+</Package>

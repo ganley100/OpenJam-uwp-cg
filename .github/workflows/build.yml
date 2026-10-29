@@ -9,6 +9,11 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    # The Xbox work has its own workflows; a change there does not need the
+    # 15-minute game build.
+    paths-ignore:
+      - "xbox/**"
+      - ".github/workflows/xbox-*.yml"
 
 env:
   REXGLUE_VERSION: "0.10.0"
