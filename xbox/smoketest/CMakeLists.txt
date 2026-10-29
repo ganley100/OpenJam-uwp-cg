@@ -16,14 +16,25 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
 
+# Built the way the game is - ordinary Windows code with the desktop C++
+# runtime - so it can ship inside the game's package as its diagnostics tile,
+# which has no VCLibs dependency. Configure from a plain (not uwp) VS prompt.
+option(SMOKETEST_DESKTOP_CRT "Build like the game: desktop partition and C++ runtime" OFF)
+
 # The desktop defaults (kernel32, user32, gdi32 ...) are not what an app links:
 # WindowsApp.lib is the umbrella for every API an app may call.
-set(CMAKE_CXX_STANDARD_LIBRARIES "WindowsApp.lib")
+if(SMOKETEST_DESKTOP_CRT)
+    set(CMAKE_CXX_STANDARD_LIBRARIES "WindowsApp.lib kernel32.lib")
+else()
+    set(CMAKE_CXX_STANDARD_LIBRARIES "WindowsApp.lib")
+endif()
 
 add_executable(smoketest WIN32 main.cpp font5x7.h)
 target_compile_definitions(smoketest PRIVATE
-    WINAPI_FAMILY=WINAPI_FAMILY_APP
     UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+if(NOT SMOKETEST_DESKTOP_CRT)
+    target_compile_definitions(smoketest PRIVATE WINAPI_FAMILY=WINAPI_FAMILY_APP)
+endif()
 target_compile_options(smoketest PRIVATE /EHsc /W3)
 target_link_options(smoketest PRIVATE /APPCONTAINER)
 # kernel32.lib only for the desktop calls the DLL check declares itself.

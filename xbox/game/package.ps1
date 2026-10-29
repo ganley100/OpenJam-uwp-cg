@@ -10,7 +10,10 @@
 param(
     [Parameter(Mandatory = $true)] [string]$BuildDir,
     [Parameter(Mandatory = $true)] [string]$Out,
-    [string]$Version = "1.0.0.0"
+    [string]$Version = "1.0.0.0",
+    # The smoke test built with -DSMOKETEST_DESKTOP_CRT=ON, the manifest's
+    # second tile.
+    [Parameter(Mandatory = $true)] [string]$Diagnostics
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,6 +26,7 @@ New-Item -ItemType Directory -Force $layout | Out-Null
 
 Get-ChildItem $BuildDir -File | Where-Object { $_.Extension -in ".exe", ".dll" } |
     Copy-Item -Destination $layout
+Copy-Item $Diagnostics (Join-Path $layout "smoketest.exe")
 
 # The desktop C++ runtime, carried by the app since the console has none.
 $crt = Get-ChildItem (Join-Path $env:VCToolsRedistDir "x64") -Directory -Filter "Microsoft.VC*.CRT" |

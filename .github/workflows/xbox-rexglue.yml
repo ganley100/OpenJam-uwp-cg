@@ -298,8 +298,17 @@ jobs:
               dumpbin /dependents $_.FullName | Select-String -Pattern "\.dll" | ForEach-Object { "   " + $_.Line.Trim() }
             }
 
+      # The smoke test, built like the game, for the package's diagnostics tile.
+      - name: Diagnostics
+        run: |
+          cmake -S xbox/smoketest -B out/build/diagnostics -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_CXX_COMPILER=clang-cl -DSMOKETEST_DESKTOP_CRT=ON
+          if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+          cmake --build out/build/diagnostics
+          if ($LASTEXITCODE -ne 0) { throw "build failed" }
+
       - name: Package
-        run: ./xbox/game/package.ps1 -BuildDir out/build/game-uwp -Out out/appx -Version "1.0.${{ github.run_number }}.0"
+        run: ./xbox/game/package.ps1 -BuildDir out/build/game-uwp -Out out/appx -Version "1.0.${{ github.run_number }}.0" -Diagnostics out/build/diagnostics/smoketest.exe
 
       - uses: actions/upload-artifact@v4
         with:

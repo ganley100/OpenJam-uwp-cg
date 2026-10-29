@@ -41,6 +41,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -251,11 +252,13 @@ bool TestCommit(size_t c) {
 // functions themselves live in kernelbase on every Windows 10, so they are
 // declared here to find out whether the console lets an app call them.
 // ReXGlue's MMIO handler (GPU register emulation) cannot work without them.
+#if WINAPI_FAMILY == WINAPI_FAMILY_APP
 using VehHandler = LONG(NTAPI*)(EXCEPTION_POINTERS*);
 extern "C" __declspec(dllimport) PVOID WINAPI
 AddVectoredExceptionHandler(ULONG first, VehHandler handler);
 extern "C" __declspec(dllimport) ULONG WINAPI
 RemoveVectoredExceptionHandler(PVOID handle);
+#endif
 
 uint8_t* g_trap_page = nullptr;
 std::atomic<int> g_trap_hits{0};
@@ -301,8 +304,10 @@ bool TestTrap(size_t c) {
 
 // Desktop-only, like the exception handler calls above; linked from
 // kernel32.lib to find out whether the console has them.
+#if WINAPI_FAMILY == WINAPI_FAMILY_APP
 extern "C" __declspec(dllimport) HMODULE WINAPI LoadLibraryW(LPCWSTR name);
 extern "C" __declspec(dllimport) BOOL WINAPI FreeLibrary(HMODULE module);
+#endif
 
 bool TestDlls(size_t c) {
   // What ReXGlue v0.10.0, SDL3, FFmpeg and the game import between them,
@@ -444,6 +449,57 @@ void WriteReport() {
     out << StateTag(ch.state) << ' ' << ch.name << '\n';
     for (const std::string& d : ch.detail) out << "         " << d << '\n';
   }
+}
+
+// --- 8. the game's own DLLs -----------------------------------------------
+
+// Shipped in the game's package, this loads every DLL beside it, one at a
+// time, in the order they depend on each other. Each is noted in report.txt
+// before it is tried, so if loading one kills the app outright - a crash in
+// its startup code - report.txt still ends with its name.
+bool TestPackageDlls(size_t c) {
+  std::vector<std::wstring> names;
+  std::error_code ec;
+  for (const auto& e : fs::directory_iterator(PackageDir(), ec)) {
+    if (e.path().extension() == L".dll") names.push_back(e.path().filename().wstring());
+  }
+  if (names.empty()) {
+    Note(c, "no DLLs in this package (run from the game's package for this)");
+    return true;
+  }
+  // The C++ runtime first, then the ReXGlue runtime, then the GPU plugin.
+  auto rank = [](const std::wstring& n) {
+    std::wstring l;
+    for (wchar_t ch : n) l += wchar_t(towlower(ch));
+    if (l.rfind(L"vcruntime", 0) == 0 || l.rfind(L"msvcp", 0) == 0 ||
+        l.rfind(L"concrt", 0) == 0 || l.rfind(L"vccorlib", 0) == 0) return 0;
+    if (l.rfind(L"rexruntime", 0) == 0) return 1;
+    return 2;
+  };
+  std::sort(names.begin(), names.end(), [&](const auto& a, const auto& b) {
+    return rank(a) != rank(b) ? rank(a) < rank(b) : a < b;
+  });
+  bool all = true;
+  for (const std::wstring& name : names) {
+    std::string narrow;
+    for (wchar_t ch : name) narrow += char(ch);
+    Note(c, "loading %s ...", narrow.c_str());
+    WriteReport();
+    HMODULE m = LoadPackagedLibrary(name.c_str(), 0);
+    const DWORD err = m ? 0 : GetLastError();
+    {
+      std::lock_guard<std::mutex> guard(g_lock);
+      g_checks[c].detail.back() =
+          m ? narrow + ": loaded"
+            : narrow + ": FAILED, error " + std::to_string(err) +
+                  (err == 126 ? " (a DLL it needs is missing)"
+                   : err == 127 ? " (a function it needs is missing)"
+                                : "");
+    }
+    all &= m != nullptr;
+    WriteReport();
+  }
+  return all;
 }
 
 template <typename T>
@@ -642,12 +698,15 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
     const size_t gpu_check = AddCheck("Direct3D 12 on the CoreWindow");
     const size_t pad = AddCheck("Controller (press any button)");
     const size_t dlls = AddCheck("Windows DLLs on the console");
+    const size_t game_dlls = AddCheck("The game's own DLLs");
 
     Finish(files, TestFiles(files) ? State::kPass : State::kFail);
     Finish(arena, TestArena(arena) ? State::kPass : State::kFail);
     Finish(commit, TestCommit(commit) ? State::kPass : State::kFail);
     Finish(trap, TestTrap(trap) ? State::kPass : State::kFail);
     Finish(dlls, TestDlls(dlls) ? State::kInfo : State::kFail);
+    WriteReport();
+    Finish(game_dlls, TestPackageDlls(game_dlls) ? State::kPass : State::kFail);
     WriteReport();
 
     Gpu gpu;
