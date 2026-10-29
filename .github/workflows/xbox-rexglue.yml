@@ -220,6 +220,15 @@ jobs:
             Write-Host "UWP-built CLI, --help:"
             & $uwpcli --help 2>&1 | Select-Object -First 15
             Write-Host "exit code $LASTEXITCODE"
+            # Where it crashes: the same runtime goes into the game.
+            $cdb = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
+            if (Test-Path $cdb) {
+              $syms = "$env:SDK_DIR\out\win-amd64\$env:CONFIG;$prefix\bin"
+              & $cdb -y $syms -c "g; .lastevent; kb 40; q" $uwpcli --help 2>&1 |
+                Select-String -NotMatch "^(ModLoad|Symbol search|Executable search)" | Select-Object -Last 70
+            } else {
+              Write-Host "no cdb on this runner"
+            }
           }
           # Codegen runs on this machine, so it uses the released desktop CLI.
           $zip = "$env:RUNNER_TEMP\rexglue-desktop.zip"

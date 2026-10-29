@@ -53,7 +53,7 @@ index 41e6dce..9c06060 100644
 +            ${REXGLUE_SHARE_DIR}/windowed_app_main_uwp.cpp
 +            ${REXGLUE_SHARE_DIR}/rex_app.cpp)
 +        target_compile_definitions(${target_name} PRIVATE REXGLUE_UWP=1)
-+        target_link_options(${target_name} PRIVATE /APPCONTAINER)
++        target_link_options(${target_name} PRIVATE "LINKER:/APPCONTAINER")
 +        target_link_libraries(${target_name} PRIVATE WindowsApp.lib)
 +    else()
 +        target_sources(${target_name} PRIVATE
