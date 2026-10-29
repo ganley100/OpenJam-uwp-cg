@@ -22,8 +22,12 @@
          MapViewOfFile3FromApp, which the guest memory arena is built with. -->
     <TargetDeviceFamily Name="Windows.Xbox" MinVersion="10.0.17134.0" MaxVersionTested="10.0.22621.0" />
     <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17134.0" MaxVersionTested="10.0.22621.0" />
-    <!-- No VCLibs: the game is ordinary Windows code, and carries the desktop
-         C++ runtime DLLs inside the package. -->
+    <!-- The app C++ runtime. The desktop one, carried inside the package,
+         keeps the app from starting on the console at all. -->
+    <PackageDependency
+      Name="Microsoft.VCLibs.140.00"
+      MinVersion="14.0.30035.0"
+      Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
   </Dependencies>
 
   <Resources>

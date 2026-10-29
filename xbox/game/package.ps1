@@ -4,15 +4,16 @@
 #   package.ps1 -BuildDir <folder with nbajam_ofe.exe> -Out <folder> [-Version 1.0.0.0]
 #
 # The package is only the program: the executable, the ReXGlue DLLs built
-# beside it, the C++ runtime and the achievement data. The game itself is
+# beside it and the achievement data. The C++ runtime is the app one, from
+# the Microsoft.VCLibs framework package, which is put beside the .appx to
+# install with it. The game itself is
 # unpacked into the app's storage on first launch (src/uwp_platform.cpp).
 
 param(
     [Parameter(Mandatory = $true)] [string]$BuildDir,
     [Parameter(Mandatory = $true)] [string]$Out,
     [string]$Version = "1.0.0.0",
-    # The smoke test built with -DSMOKETEST_DESKTOP_CRT=ON, the manifest's
-    # second tile.
+    # The smoke test, the manifest's second tile.
     [Parameter(Mandatory = $true)] [string]$Diagnostics
 )
 
@@ -28,11 +29,8 @@ Get-ChildItem $BuildDir -File | Where-Object { $_.Extension -in ".exe", ".dll" }
     Copy-Item -Destination $layout
 Copy-Item $Diagnostics (Join-Path $layout "smoketest.exe")
 
-# The desktop C++ runtime, carried by the app since the console has none.
-$crt = Get-ChildItem (Join-Path $env:VCToolsRedistDir "x64") -Directory -Filter "Microsoft.VC*.CRT" |
-       Select-Object -First 1
-if (-not $crt) { throw "No C++ runtime under $env:VCToolsRedistDir" }
-Get-ChildItem $crt.FullName -Filter *.dll | Copy-Item -Destination $layout
+# Never the desktop C++ runtime: inside a package it stops the app from
+# starting on the console. Built against the app runtime, nothing to copy.
 
 $meta = Join-Path $repo "metadata"
 if (Test-Path $meta) { Copy-Item -Recurse $meta (Join-Path $layout "metadata") }
@@ -55,6 +53,17 @@ $pw = ConvertTo-SecureString -String "openjam" -Force -AsPlainText
 Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pw | Out-Null
 & signtool sign /fd SHA256 /f $pfx /p openjam $appx
 if ($LASTEXITCODE -ne 0) { throw "signtool failed ($LASTEXITCODE)" }
+
+# The app C++ runtime the package depends on, from the same toolset that
+# built it, to install alongside.
+$vclibs = Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft SDKs\Windows Kits\10\ExtensionSDKs\Microsoft.VCLibs" `
+    -Recurse -Filter "Microsoft.VCLibs.x64.14.00.appx" -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -match "\\Retail\\" } | Select-Object -First 1
+if ($vclibs) {
+    Copy-Item $vclibs.FullName $Out
+} else {
+    Write-Warning "Microsoft.VCLibs.x64.14.00.appx not found on this machine"
+}
 
 Write-Host "Package contents:"
 Get-ChildItem $layout -Recurse -File | ForEach-Object { "  {0,12:N0}  {1}" -f $_.Length, $_.FullName.Substring($layout.Length + 1) }

@@ -180,9 +180,21 @@ jobs:
           choco install ninja -y --no-progress
           "C:\Program Files\LLVM\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
+      # `uwp` puts MSVC's store libraries on LIB: the app C++ runtime
+      # (vcruntime140_app, msvcp140_app, from the VCLibs package) rather than
+      # the desktop one. Shipped inside the package, the desktop runtime keeps
+      # an app from starting on the console at all.
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+          uwp: true
+
+      # The app runtime needs RoInitialize and friends from WindowsApp.lib, in
+      # every binary and in CMake's own compiler checks.
+      - name: App link libraries
+        run: |
+          $libs = "-lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 -lWindowsApp"
+          "APP_STD_LIBS=$libs" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.22
@@ -195,6 +207,7 @@ jobs:
         run: |
           cmake --preset win-amd64 -B out/build/uwp `
             -DREXGLUE_UWP=ON `
+            "-DCMAKE_C_STANDARD_LIBRARIES=$env:APP_STD_LIBS" "-DCMAKE_CXX_STANDARD_LIBRARIES=$env:APP_STD_LIBS" `
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ `
             -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
             "-DCMAKE_INSTALL_PREFIX=$((Get-Location).Path)/out/install/uwp" `
@@ -267,6 +280,7 @@ jobs:
         run: |
           cmake -S . -B out/build/game-uwp -G Ninja "-DCMAKE_BUILD_TYPE=$env:CONFIG" `
             -DNBAJAM_UWP=ON "-DNBAJAM_CODEGEN_CLI=$env:REXGLUE_CLI" `
+            "-DCMAKE_C_STANDARD_LIBRARIES=$env:APP_STD_LIBS" "-DCMAKE_CXX_STANDARD_LIBRARIES=$env:APP_STD_LIBS" `
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ `
             -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
             "-DCMAKE_PREFIX_PATH=$env:REXGLUE_PREFIX"
@@ -298,11 +312,12 @@ jobs:
               dumpbin /dependents $_.FullName | Select-String -Pattern "\.dll" | ForEach-Object { "   " + $_.Line.Trim() }
             }
 
-      # The smoke test, built like the game, for the package's diagnostics tile.
+      # The smoke test, for the package's diagnostics tile. Built as the
+      # standalone one is, which is known to run on the console.
       - name: Diagnostics
         run: |
           cmake -S xbox/smoketest -B out/build/diagnostics -G Ninja -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_CXX_COMPILER=clang-cl -DSMOKETEST_DESKTOP_CRT=ON
+            -DCMAKE_CXX_COMPILER=clang-cl
           if ($LASTEXITCODE -ne 0) { throw "configure failed" }
           cmake --build out/build/diagnostics
           if ($LASTEXITCODE -ne 0) { throw "build failed" }
