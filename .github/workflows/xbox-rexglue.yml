@@ -17,7 +17,8 @@ env:
   # Outside the checkout, and without "..", which upload-artifact refuses.
   SDK_DIR: D:\rexglue-sdk
   # One configuration, not the SDK preset's three: it is the one the game uses.
-  CONFIG: RelWithDebInfo
+  # Release: the SDK only installs its rexglue CLI (codegen) for Release.
+  CONFIG: Release
 
 jobs:
   # The SDK as ordinary Windows code with the patches applied, and the game
@@ -212,10 +213,9 @@ jobs:
         run: |
           $prefix = (Resolve-Path "$env:SDK_DIR/out/install/uwp").Path
           "REXGLUE_PREFIX=$prefix" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          # Built with a configuration suffix (rexgluerd.exe); a console tool,
-          # so it runs here even from the UWP build.
-          $cli = Get-ChildItem "$env:SDK_DIR/out" -Recurse -Filter "rexglue*.exe" | Select-Object -First 1
-          if (-not $cli) { throw "the rexglue CLI was not built" }
+          # A console tool, so it runs here even from the UWP build.
+          $cli = Get-Item "$prefix/bin/rexglue.exe" -ErrorAction SilentlyContinue
+          if (-not $cli) { Get-ChildItem "$prefix/bin"; throw "the rexglue CLI was not installed" }
           "REXGLUE_CLI=$($cli.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       # The game, as the Xbox app (NBAJAM_UWP), against that SDK.
@@ -231,6 +231,7 @@ jobs:
           $xex = Join-Path (Split-Path -Parent $env:GITHUB_WORKSPACE) "Root\default.xex"
           New-Item -ItemType Directory -Force $tmp | Out-Null
           & $env:REXGLUE_CLI init --project-name nbajam_ofe --xex-path $xex --project-root $tmp
+          if ($LASTEXITCODE -ne 0) { throw "rexglue init failed ($LASTEXITCODE)" }
           $found = Get-ChildItem $tmp -Recurse -Filter rexglue.cmake | Select-Object -First 1
           if (-not $found) { throw "rexglue init did not produce generated/rexglue.cmake" }
           New-Item -ItemType Directory -Force generated | Out-Null
