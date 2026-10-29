@@ -4,6 +4,12 @@
 # LIB points at MSVC's app-container CRT in lib\x64\store.
 
 cmake_minimum_required(VERSION 3.25)
+
+# CMake's compiler check links a test program against the desktop libraries,
+# which the app CRT cannot link with (it wants RoInitialize from
+# WindowsApp.lib). Checking that it compiles is enough.
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
 project(openjam_xbox_smoketest LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
