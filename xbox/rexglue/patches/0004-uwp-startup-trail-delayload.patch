@@ -1,0 +1,173 @@
+diff --git a/cmake/rexglue_helpers.cmake b/cmake/rexglue_helpers.cmake
+index bf28a3f..2d50fef 100644
+--- a/cmake/rexglue_helpers.cmake
++++ b/cmake/rexglue_helpers.cmake
+@@ -83,8 +83,9 @@ function(rexglue_configure_target target_name)
+             ${REXGLUE_SHARE_DIR}/windowed_app_main_uwp.cpp
+             ${REXGLUE_SHARE_DIR}/rex_app.cpp)
+         target_compile_definitions(${target_name} PRIVATE REXGLUE_UWP=1)
+-        target_link_options(${target_name} PRIVATE "LINKER:/APPCONTAINER")
+-        target_link_libraries(${target_name} PRIVATE WindowsApp.lib)
++        target_link_options(${target_name} PRIVATE "LINKER:/APPCONTAINER"
++            "LINKER:/DELAYLOAD:oleaut32.dll")
++        target_link_libraries(${target_name} PRIVATE WindowsApp.lib delayimp.lib)
+     else()
+         target_sources(${target_name} PRIVATE
+             ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp
+diff --git a/src/system/CMakeLists.txt b/src/system/CMakeLists.txt
+index ff21145..e6677f2 100644
+--- a/src/system/CMakeLists.txt
++++ b/src/system/CMakeLists.txt
+@@ -80,6 +80,16 @@ target_include_directories(rexruntime PRIVATE
+ if(NOT REXGLUE_UWP)  # OpenJam: no SDL3 in a UWP build
+     target_link_libraries(rexruntime PUBLIC SDL3::SDL3)
+ endif()
++if(REXGLUE_UWP)
++    # OpenJam: desktop DLLs that may not be on the console are only loaded if
++    # something calls into them, so a missing one cannot stop the app before
++    # it starts. If one is missing and used, startup.txt names it.
++    target_link_options(rexruntime PRIVATE
++        "LINKER:/DELAYLOAD:user32.dll" "LINKER:/DELAYLOAD:shell32.dll"
++        "LINKER:/DELAYLOAD:imm32.dll" "LINKER:/DELAYLOAD:oleaut32.dll"
++        "LINKER:/DELAYLOAD:ws2_32.dll")
++    target_link_libraries(rexruntime PRIVATE delayimp.lib)
++endif()
+ target_link_libraries(rexruntime
+     PUBLIC
+         simde
+diff --git a/src/ui/windowed_app_main_uwp.cpp b/src/ui/windowed_app_main_uwp.cpp
+index efd15a9..510bcd2 100644
+--- a/src/ui/windowed_app_main_uwp.cpp
++++ b/src/ui/windowed_app_main_uwp.cpp
+@@ -14,8 +14,11 @@
+ #endif
+ #include <windows.h>
+ 
++#include <cstdio>
+ #include <cstdlib>
++#include <exception>
+ #include <filesystem>
++#include <fstream>
+ #include <map>
+ #include <memory>
+ #include <string>
+@@ -35,6 +38,55 @@ namespace {
+ using namespace winrt::Windows::ApplicationModel::Core;
+ using winrt::Windows::UI::Core::CoreWindow;
+ 
++// A trail of how far startup got, in LocalState\startup.txt, and what killed
++// it if something did. On a console there is no other way to tell: an app that
++// dies early leaves no log and no dialog, only a splash screen that closes.
++std::filesystem::path g_trail;
++
++void Trail(const char* text) {
++  if (g_trail.empty()) {
++    return;
++  }
++  std::ofstream f(g_trail, std::ios::app);
++  f << text << "\n";
++}
++
++LONG WINAPI RecordCrash(EXCEPTION_POINTERS* info) {
++  const auto* rec = info->ExceptionRecord;
++  char module_name[MAX_PATH] = "?";
++  HMODULE module = nullptr;
++  uintptr_t offset = 0;
++  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                         static_cast<LPCSTR>(rec->ExceptionAddress), &module) &&
++      module) {
++    GetModuleFileNameA(module, module_name, MAX_PATH);
++    offset = reinterpret_cast<uintptr_t>(rec->ExceptionAddress) - reinterpret_cast<uintptr_t>(module);
++  }
++  char line[512];
++  // 0xC06D007E is a delay-loaded DLL that is not on the console; its name is
++  // in the delay-load record.
++  std::snprintf(line, sizeof(line), "CRASH: exception %08lX at %s+0x%llX",
++                static_cast<unsigned long>(rec->ExceptionCode), module_name,
++                static_cast<unsigned long long>(offset));
++  Trail(line);
++  if (rec->ExceptionCode == 0xC06D007E && rec->NumberParameters >= 1) {
++    // DelayLoadInfo: its szDll is the second pointer-sized field after cb.
++    struct Info {
++      DWORD cb;
++      const void* pidd;
++      const void** ppfn;
++      LPCSTR szDll;
++    };
++    const auto* dli = reinterpret_cast<const Info*>(rec->ExceptionInformation[0]);
++    if (dli && dli->szDll) {
++      std::snprintf(line, sizeof(line), "CRASH: missing DLL %s", dli->szDll);
++      Trail(line);
++    }
++  }
++  return EXCEPTION_CONTINUE_SEARCH;
++}
++
+ // An app has no command line. Everything that would be passed on one comes
+ // from the app's own defaults (ReXApp::OnPreSetup) or a config file.
+ int RunWindowedApp(::IUnknown* core_window) {
+@@ -44,20 +96,32 @@ int RunWindowedApp(::IUnknown* core_window) {
+   try {
+     std::filesystem::current_path(std::filesystem::path(std::wstring(
+         winrt::Windows::Storage::ApplicationData::Current().LocalFolder().Path())));
++    Trail("2 working folder is LocalState");
+   } catch (...) {
++    Trail("2 could not make LocalState the working folder");
+   }
+   char arg0[] = "app";
+   char* argv[] = {arg0, nullptr};
+   rex::cvar::Init(1, argv);
+   rex::cvar::ApplyEnvironment();
++  Trail("3 settings read");
+   rex::InitLoggingEarly();
++  Trail("4 logging started (LocalState\\logs)");
+ 
+   int result;
+   {
+     rex::ui::UWPWindowedAppContext app_context(core_window);
+     std::unique_ptr<rex::ui::WindowedApp> app = rex::ui::GetWindowedAppCreator()(app_context);
++    Trail("5 app created (game found)");
+     app->SetParsedArguments(std::map<std::string, std::string>{});
+-    result = app->OnInitialize() ? app_context.RunMainMessageLoop() : EXIT_FAILURE;
++    if (app->OnInitialize()) {
++      Trail("6 initialized; running");
++      result = app_context.RunMainMessageLoop();
++      Trail("7 message loop ended");
++    } else {
++      Trail("6 FAILED to initialize - see the log in LocalState\\logs");
++      result = EXIT_FAILURE;
++    }
+     app->InvokeOnDestroy();
+   }
+   return result;
+@@ -72,7 +136,28 @@ struct View : winrt::implements<View, IFrameworkViewSource, IFrameworkView> {
+ 
+   void Run() {
+     window_.Activate();
+-    RunWindowedApp(static_cast<::IUnknown*>(winrt::get_abi(window_)));
++    try {
++      g_trail = std::filesystem::path(std::wstring(
++                    winrt::Windows::Storage::ApplicationData::Current().LocalFolder().Path())) /
++                "startup.txt";
++      std::ofstream(g_trail, std::ios::trunc) << "1 app started: every DLL it needs loaded\n";
++    } catch (...) {
++    }
++    SetUnhandledExceptionFilter(RecordCrash);
++    std::set_terminate([] {
++      Trail("CRASH: unhandled C++ exception (std::terminate)");
++      std::abort();
++    });
++    try {
++      RunWindowedApp(static_cast<::IUnknown*>(winrt::get_abi(window_)));
++    } catch (const winrt::hresult_error& e) {
++      char line[512];
++      std::snprintf(line, sizeof(line), "CRASH: Windows error %08X: %ls",
++                    static_cast<unsigned>(e.code().value), e.message().c_str());
++      Trail(line);
++    } catch (const std::exception& e) {
++      Trail((std::string("CRASH: ") + e.what()).c_str());
++    }
+     // Leaving Run ends the app.
+   }
+ 
