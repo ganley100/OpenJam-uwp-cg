@@ -80,7 +80,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "build failed" }
           $prefix = (Resolve-Path out/install/win-amd64).Path
           "REXGLUE_PREFIX=$prefix" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          "$prefix\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          # The CLI is not necessarily in bin/; find it.
+          $cli = Get-ChildItem out -Recurse -Filter rexglue.exe | Select-Object -First 1
+          if (-not $cli) { throw "rexglue.exe was not built" }
+          Write-Host "rexglue CLI: $($cli.FullName)"
+          $cli.Directory.FullName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       - name: sccache stats
         if: always()
