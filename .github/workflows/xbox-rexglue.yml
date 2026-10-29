@@ -11,6 +11,7 @@ on:
     paths:
       - "xbox/rexglue/**"
       - "xbox/game/**"
+      - "xbox/smoketest/**"
       - "src/**"
       - "CMakeLists.txt"
       - "*.toml"

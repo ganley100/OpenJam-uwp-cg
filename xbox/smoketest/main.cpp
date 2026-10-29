@@ -40,7 +40,10 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <csignal>
+#include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
@@ -473,10 +476,59 @@ extern "C" __declspec(dllimport) DWORD WINAPI GetModuleFileNameA(HMODULE module,
 size_t g_load_check = SIZE_MAX;
 std::atomic<int> g_load_faults{0};
 
+// A C++ exception carries its type in the ThrowInfo the compiler emits; on
+// x64 every pointer in it is an offset from the throwing module's base.
+struct ThrowInfoX64 {
+  uint32_t attributes;
+  int32_t unwind, forward_compat, catchable_types;
+};
+struct CatchableTypeX64 {
+  uint32_t properties;
+  int32_t type;
+  int32_t mdisp, pdisp, vdisp;
+  int32_t size, copy;
+};
+struct TypeDescriptorX64 {
+  const void* vftable;
+  void* spare;
+  char name[1];
+};
+
+// The type of a thrown C++ exception, and what() if it is a std::exception.
+// Plain C, so __try can guard reading memory that may not be what it seems.
+void DescribeCppException(const EXCEPTION_RECORD* rec, char* out, size_t size) {
+  std::snprintf(out, size, " (C++ exception)");
+  if (rec->NumberParameters < 4) return;
+  __try {
+    const auto base = static_cast<uintptr_t>(rec->ExceptionInformation[3]);
+    const auto* info = reinterpret_cast<const ThrowInfoX64*>(rec->ExceptionInformation[2]);
+    auto* object = reinterpret_cast<uint8_t*>(rec->ExceptionInformation[1]);
+    if (!info || !base) return;
+    const auto* types = reinterpret_cast<const int32_t*>(base + uint32_t(info->catchable_types));
+    const int32_t count = types[0];
+    const char* first = nullptr;
+    const char* message = nullptr;
+    for (int32_t i = 0; i < count && i < 16; ++i) {
+      const auto* ct = reinterpret_cast<const CatchableTypeX64*>(base + uint32_t(types[1 + i]));
+      const auto* td = reinterpret_cast<const TypeDescriptorX64*>(base + uint32_t(ct->type));
+      if (!first) first = td->name;
+      if (!message && std::strcmp(td->name, ".?AVexception@std@@") == 0 && object) {
+        message = reinterpret_cast<const std::exception*>(object + ct->mdisp)->what();
+      }
+    }
+    std::snprintf(out, size, " (C++ %s: %s)", first ? first : "?",
+                  message ? message : "no message");
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+  }
+}
+
 LONG CALLBACK RecordLoadFault(EXCEPTION_POINTERS* info) {
   const auto* rec = info->ExceptionRecord;
-  // Only real faults, and only the first few (a crash can cascade).
-  if (rec->ExceptionCode < 0xC0000000u || g_load_faults.fetch_add(1) >= 3) {
+  // Faults and C++ exceptions, and only the first few (a crash can
+  // cascade). A C++ exception nothing catches ends in a fast fail, which no
+  // handler sees, so the throw is the only trace of it.
+  const bool cpp = rec->ExceptionCode == 0xE06D7363;
+  if ((!cpp && rec->ExceptionCode < 0xC0000000u) || g_load_faults.fetch_add(1) >= 6) {
     return EXCEPTION_CONTINUE_SEARCH;
   }
   char module_name[MAX_PATH] = "?";
@@ -492,8 +544,10 @@ LONG CALLBACK RecordLoadFault(EXCEPTION_POINTERS* info) {
   }
   const char* base = std::strrchr(module_name, '\\');
   base = base ? base + 1 : module_name;
-  char what[96] = "";
-  if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2) {
+  char what[384] = "";
+  if (cpp) {
+    DescribeCppException(rec, what, sizeof(what));
+  } else if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2) {
     std::snprintf(what, sizeof(what), " (%s 0x%llX)",
                   rec->ExceptionInformation[0] == 0 ? "reading" :
                   rec->ExceptionInformation[0] == 1 ? "writing" : "executing",
@@ -541,6 +595,27 @@ bool TestPackageDlls(size_t c) {
   });
   g_load_check = c;
   void* recorder = AddVectoredExceptionHandler(1, RecordLoadFault);
+  // The ways a DLL's startup can end the process without a fault: an
+  // unhandled C++ exception, abort(), and the CRT's invalid-parameter check.
+  std::set_terminate([] {
+    if (g_load_check != SIZE_MAX) {
+      Note(g_load_check, "TERMINATE: an unhandled C++ exception (see the line above)");
+      WriteReport();
+    }
+    std::abort();
+  });
+  signal(SIGABRT, [](int) {
+    if (g_load_check != SIZE_MAX) {
+      Note(g_load_check, "ABORT called");
+      WriteReport();
+    }
+  });
+  _set_invalid_parameter_handler([](const wchar_t*, const wchar_t*, const wchar_t*, unsigned, uintptr_t) {
+    if (g_load_check != SIZE_MAX) {
+      Note(g_load_check, "INVALID PARAMETER passed to a C runtime function");
+      WriteReport();
+    }
+  });
   bool all = true;
   for (const std::wstring& name : names) {
     std::string narrow;
