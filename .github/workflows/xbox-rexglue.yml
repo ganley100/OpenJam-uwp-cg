@@ -195,6 +195,8 @@ jobs:
       - name: App link libraries
         run: |
           "APP_LINK=-lWindowsApp" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          # A linker map beside each DLL, so a crash offset names a function.
+          "APP_MAP=-Xlinker /MAP" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.22
@@ -207,7 +209,7 @@ jobs:
         run: |
           cmake --preset win-amd64 -B out/build/uwp `
             -DREXGLUE_UWP=ON `
-            "-DCMAKE_EXE_LINKER_FLAGS=$env:APP_LINK" "-DCMAKE_SHARED_LINKER_FLAGS=$env:APP_LINK" `
+            "-DCMAKE_EXE_LINKER_FLAGS=$env:APP_LINK" "-DCMAKE_SHARED_LINKER_FLAGS=$env:APP_LINK $env:APP_MAP" `
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ `
             -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
             "-DCMAKE_INSTALL_PREFIX=$((Get-Location).Path)/out/install/uwp" `
@@ -324,6 +326,21 @@ jobs:
 
       - name: Package
         run: ./xbox/game/package.ps1 -BuildDir out/build/game-uwp -Out out/appx -Version "1.0.${{ github.run_number }}.0" -Diagnostics out/build/diagnostics/smoketest.exe
+
+      - name: Linker maps
+        if: always()
+        run: |
+          New-Item -ItemType Directory -Force out/maps | Out-Null
+          Get-ChildItem "$env:SDK_DIR/out" -Recurse -Filter *.map -ErrorAction SilentlyContinue |
+            Copy-Item -Destination out/maps
+          Get-ChildItem out/maps
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linker-maps
+          path: out/maps
+          retention-days: 30
 
       - uses: actions/upload-artifact@v4
         with:

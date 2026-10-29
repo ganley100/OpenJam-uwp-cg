@@ -453,6 +453,66 @@ void WriteReport() {
 
 // --- 8. the game's own DLLs -----------------------------------------------
 
+// Records the first fault while a DLL is loading: what it was, in which
+// module, at what offset - enough, with the build's linker map, to name the
+// function. It only observes; the fault goes on to do what it would have.
+#if WINAPI_FAMILY == WINAPI_FAMILY_APP
+// Desktop-only declarations again, from kernel32.lib.
+extern "C" __declspec(dllimport) BOOL WINAPI GetModuleHandleExA(DWORD flags, LPCSTR name,
+                                                                HMODULE* module);
+extern "C" __declspec(dllimport) DWORD WINAPI GetModuleFileNameA(HMODULE module, LPSTR name,
+                                                                 DWORD size);
+#endif
+#ifndef GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT
+#define GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT 0x00000002
+#endif
+#ifndef GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+#define GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS 0x00000004
+#endif
+
+size_t g_load_check = SIZE_MAX;
+std::atomic<int> g_load_faults{0};
+
+LONG CALLBACK RecordLoadFault(EXCEPTION_POINTERS* info) {
+  const auto* rec = info->ExceptionRecord;
+  // Only real faults, and only the first few (a crash can cascade).
+  if (rec->ExceptionCode < 0xC0000000u || g_load_faults.fetch_add(1) >= 3) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  char module_name[MAX_PATH] = "?";
+  HMODULE module = nullptr;
+  uintptr_t offset = 0;
+  if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         static_cast<LPCSTR>(rec->ExceptionAddress), &module) &&
+      module) {
+    GetModuleFileNameA(module, module_name, MAX_PATH);
+    offset = reinterpret_cast<uintptr_t>(rec->ExceptionAddress) -
+             reinterpret_cast<uintptr_t>(module);
+  }
+  const char* base = std::strrchr(module_name, '\\');
+  base = base ? base + 1 : module_name;
+  char what[96] = "";
+  if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2) {
+    std::snprintf(what, sizeof(what), " (%s 0x%llX)",
+                  rec->ExceptionInformation[0] == 0 ? "reading" :
+                  rec->ExceptionInformation[0] == 1 ? "writing" : "executing",
+                  static_cast<unsigned long long>(rec->ExceptionInformation[1]));
+  } else if (rec->ExceptionCode == 0xC000001D) {
+    std::snprintf(what, sizeof(what), " (an instruction this CPU does not have)");
+  } else if (rec->ExceptionCode == 0xC0000409 && rec->NumberParameters >= 1) {
+    std::snprintf(what, sizeof(what), " (fast fail %llu)",
+                  static_cast<unsigned long long>(rec->ExceptionInformation[0]));
+  }
+  if (g_load_check != SIZE_MAX) {
+    Note(g_load_check, "FAULT %08lX at %s+0x%llX%s",
+         static_cast<unsigned long>(rec->ExceptionCode), base,
+         static_cast<unsigned long long>(offset), what);
+    WriteReport();
+  }
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+
 // Shipped in the game's package, this loads every DLL beside it, one at a
 // time, in the order they depend on each other. Each is noted in report.txt
 // before it is tried, so if loading one kills the app outright - a crash in
@@ -479,6 +539,8 @@ bool TestPackageDlls(size_t c) {
   std::sort(names.begin(), names.end(), [&](const auto& a, const auto& b) {
     return rank(a) != rank(b) ? rank(a) < rank(b) : a < b;
   });
+  g_load_check = c;
+  void* recorder = AddVectoredExceptionHandler(1, RecordLoadFault);
   bool all = true;
   for (const std::wstring& name : names) {
     std::string narrow;
@@ -499,6 +561,8 @@ bool TestPackageDlls(size_t c) {
     all &= m != nullptr;
     WriteReport();
   }
+  if (recorder) RemoveVectoredExceptionHandler(recorder);
+  g_load_check = SIZE_MAX;
   return all;
 }
 
