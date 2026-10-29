@@ -1,0 +1,53 @@
+# NBA JAM: On Fire Edition - mid-ASM hooks
+#
+# Regenerate register probes with tools/probe_sites.py <function names>; that
+# tool rewrites this whole file, so keep hand-written entries below in mind
+# before running it.
+template_dir = "templates"
+
+# VP6 video decoder. sub_824E5FD8 writes one reconstructed 8x8 block:
+#   sub_824E5FD8(r3 = destination, r4 = residuals, r5 = plane stride)
+#
+# return_on_true, not ret: the hook decides whether the guest body still runs,
+# so it stays inert unless one of the NBAJAM_VP6_* environment variables is
+# set. An unconditional `ret` would disable the guest function on every run.
+[[midasm_hook]]
+address = 0x824E5FD8
+name = "NbaVp6WriteBlock"
+registers = ["r3", "r4", "r5"]
+return_on_true = true
+
+# DDS texture replacement. sub_823FC250 is the guest function that turns a blob
+# loaded from a .ast archive into a texture; it opens by checking the first four
+# bytes for 'XPR2'. The hook runs before that check and rewrites the blob in
+# place when the active mod supplies a replacement. Plain hook, no return
+# control: the guest function still does the work.
+[[midasm_hook]]
+address = 0x823FC250
+name = "NbaDdsSubstitute"
+registers = ["r3"]
+
+# Scripted controller input, for testing without taking window focus. Sits on
+# the instruction after the XamInputGetState call in sub_8299C658, so the
+# XINPUT_STATE at r1+208 is already filled and the game has not read it yet.
+# Inert unless NBAJAM_INPUT_SCRIPT is set.
+[[midasm_hook]]
+address = 0x8299C6D4
+name = "NbaScriptedInput"
+registers = ["r1", "r26", "r3"]
+
+# Front-end script tracing. sub_82330438 is the ActionScript execution loop;
+# it is handed a block of bytecode in r4 and its length in r6. Logging the
+# blocks a screen runs, and diffing that against an edited copy of the screen,
+# shows where the edited one stops. Inert unless NBAJAM_APT_TRACE is set.
+[[midasm_hook]]
+address = 0x82330438
+name = "NbaAptBlock"
+registers = ["r3", "r4", "r5", "r6"]
+
+# Where the resource lookup gives up. A mod with a hole in its art used to
+# take the game down here; see src/asset_fallback.cpp.
+[[midasm_hook]]
+address = 0x823678B4
+name = "NbaAssetFallback"
+registers = ["r3", "r31"]

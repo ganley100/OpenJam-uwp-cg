@@ -1,0 +1,130 @@
+# Builds the Windows PC version on a GitHub-hosted runner.
+#
+# Needs game/default.xex, taken from your own copy of the game. Keep this
+# repository PRIVATE: the XEX and the build output are EA's code.
+
+name: Build (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+env:
+  REXGLUE_VERSION: "0.10.0"
+  BUILD_DIR: out/build/local-relwithdebinfo
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Toolchain
+        run: |
+          $ver = 0
+          if (Get-Command clang -ErrorAction SilentlyContinue) {
+            $line = (clang --version | Select-Object -First 1)
+            Write-Host $line
+            if ($line -match 'version (\d+)') { $ver = [int]$Matches[1] }
+          }
+          if ($ver -lt 20) { choco install llvm -y --no-progress }
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress }
+          "C:\Program Files\LLVM\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: ReXGlue SDK
+        run: |
+          $zip = "$env:RUNNER_TEMP\rexglue.zip"
+          $dir = "$env:RUNNER_TEMP\rexglue"
+          Invoke-WebRequest -UseBasicParsing -OutFile $zip `
+            "https://github.com/rexglue/rexglue-sdk/releases/download/v$env:REXGLUE_VERSION/rexglue-sdk-$env:REXGLUE_VERSION-win-amd64.zip"
+          Expand-Archive $zip $dir
+          $cfg = Get-ChildItem $dir -Recurse -Filter rexglueConfig.cmake | Select-Object -First 1
+          $cli = Get-ChildItem $dir -Recurse -Filter rexglue.exe | Select-Object -First 1
+          if (-not $cfg -or -not $cli) { Get-ChildItem $dir -Recurse -Depth 3 | Select-Object FullName; throw "SDK layout not recognised" }
+          # Prefix is the folder holding bin/, lib/, include/
+          $prefix = $cli.Directory.Parent.FullName
+          Write-Host "SDK prefix: $prefix"
+          "REXGLUE_PREFIX=$prefix" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          $cli.Directory.FullName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Game executable
+        run: |
+          # The manifest reads ../Root/default.xex, relative to the project.
+          $root = Join-Path (Split-Path -Parent $env:GITHUB_WORKSPACE) "Root"
+          New-Item -ItemType Directory -Force $root | Out-Null
+          Copy-Item game/default.xex "$root/default.xex"
+          Get-Item "$root/default.xex" | Select-Object FullName, Length
+
+      - name: Generate rexglue.cmake
+        run: |
+          # generated/ is untracked; `rexglue init` writes the SDK integration
+          # script. Init a scratch project and take only that file.
+          rexglue --version
+          rexglue init --help
+          $tmp = "$env:RUNNER_TEMP\initproj"
+          $xex = Join-Path (Split-Path -Parent $env:GITHUB_WORKSPACE) "Root\default.xex"
+          $attempts = @(
+            @('init', '--app_name', 'nbajam_ofe', '--app_root', $tmp, '--force'),
+            @('init', '--project-name', 'nbajam_ofe', '--xex-path', $xex, '--app_root', $tmp, '--force'),
+            @('init', '--project-name', 'nbajam_ofe', '--xex-path', $xex, '--output', $tmp, '--force')
+          )
+          foreach ($a in $attempts) {
+            Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+            Write-Host "> rexglue $($a -join ' ')"
+            & rexglue @a
+            $found = Get-ChildItem $tmp -Recurse -Filter rexglue.cmake -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { break }
+          }
+          if (-not $found) { throw "rexglue init did not produce generated/rexglue.cmake" }
+          New-Item -ItemType Directory -Force generated | Out-Null
+          Copy-Item $found.FullName generated/rexglue.cmake
+          # This project's codegen output lives in generated/default
+          Select-String -Path generated/rexglue.cmake -Pattern 'generated' | Select-Object -First 10
+
+      - name: Configure
+        run: |
+          cmake -S . -B $env:BUILD_DIR -G Ninja `
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ `
+            "-DCMAKE_PREFIX_PATH=$env:REXGLUE_PREFIX"
+
+      - name: Codegen
+        run: |
+          cmake --build $env:BUILD_DIR --target nbajam_ofe_codegen
+          # Pick up the generated sources
+          cmake -S . -B $env:BUILD_DIR
+
+      - name: Build
+        run: |
+          $jobs = [Math]::Max(1, [Environment]::ProcessorCount)
+          Write-Host "Building with $jobs jobs"
+          cmake --build $env:BUILD_DIR -j $jobs
+
+      - name: Collect
+        run: |
+          $out = "$env:RUNNER_TEMP\nbajam_ofe"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Get-ChildItem $env:BUILD_DIR -File | Where-Object { $_.Extension -in '.exe', '.dll', '.pdb' } |
+            Copy-Item -Destination $out
+          Copy-Item -Recurse metadata "$out/metadata"
+          Get-ChildItem $out | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nbajam_ofe-windows
+          path: ${{ runner.temp }}/nbajam_ofe
+          retention-days: 14
+
+      - name: Logs on failure
+        if: failure()
+        run: Get-ChildItem -Recurse -Filter *.log -ErrorAction SilentlyContinue | ForEach-Object { "== $($_.FullName)"; Get-Content $_ -Tail 60 }
