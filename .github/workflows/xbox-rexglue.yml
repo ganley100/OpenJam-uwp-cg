@@ -295,6 +295,23 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "codegen failed" }
           cmake -S . -B out/build/game-uwp
 
+      # The generated C++ of the guest functions named in
+      # xbox/game/inspect-functions.txt, for reading what the game does.
+      - name: Guest functions
+        run: |
+          $names = Get-Content xbox/game/inspect-functions.txt | Where-Object { $_ -and -not $_.StartsWith("#") }
+          $files = Get-ChildItem generated/default -Filter "*.cpp"
+          foreach ($name in $names) {
+            $hit = $files | Select-String -Pattern "^\S.*\b$name\b.*\{\s*$" | Select-Object -First 1
+            if (-not $hit) { Write-Host "===== $name: not found"; continue }
+            Write-Host "===== $name ($($hit.Filename):$($hit.LineNumber))"
+            $lines = Get-Content $hit.Path
+            for ($i = $hit.LineNumber - 1; $i -lt [Math]::Min($lines.Count, $hit.LineNumber + 600); $i++) {
+              Write-Host $lines[$i]
+              if ($i -gt $hit.LineNumber - 1 -and $lines[$i] -eq "}") { break }
+            }
+          }
+
       - name: Build game (UWP)
         run: |
           cmake --build out/build/game-uwp --parallel -- -k 0 2>&1 |

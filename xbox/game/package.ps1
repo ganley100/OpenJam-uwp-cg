@@ -32,6 +32,9 @@ Copy-Item $Diagnostics (Join-Path $layout "smoketest.exe")
 # Never the desktop C++ runtime: inside a package it stops the app from
 # starting on the console. Built against the app runtime, nothing to copy.
 
+# Runtime settings, read from beside the executable.
+Copy-Item (Join-Path $here "nbajam_ofe.toml") $layout
+
 $meta = Join-Path $repo "metadata"
 if (Test-Path $meta) { Copy-Item -Recurse $meta (Join-Path $layout "metadata") }
 Copy-Item -Recurse (Join-Path $repo "packaging\xbox\Assets") (Join-Path $layout "Assets")

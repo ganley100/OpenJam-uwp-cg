@@ -1,0 +1,8 @@
+# Recompiled guest functions whose generated C++ the Xbox build prints to its
+# log, for reading why the game does what it does on the console. One per
+# line.
+#
+# KeBugCheck on the console, about 30 s in, front end loading (log 004):
+sub_8224D490
+sub_8224AF68
+sub_8259CDE8

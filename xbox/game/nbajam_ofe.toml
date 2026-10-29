@@ -1,0 +1,4 @@
+# Runtime settings shipped beside the Xbox build's executable, where ReXApp
+# looks for <name>.toml. Debug logging while the port is being brought up on
+# the console: the log in LocalState\logs is the only window into it.
+log_level = "debug"
