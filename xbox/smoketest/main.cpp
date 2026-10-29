@@ -454,6 +454,107 @@ void WriteReport() {
   }
 }
 
+// --- 9. what the game's files import -------------------------------------
+
+// Reads each of the game's files' import tables from disk - nothing is
+// loaded or run - and looks up every function they import on this console.
+// A function the console lacks is what can stop a DLL before any of its code
+// runs, and that leaves nothing behind but this.
+uint32_t RvaToOffset(const std::vector<uint8_t>& f, const IMAGE_NT_HEADERS64* nt, uint32_t rva) {
+  const auto* sec = IMAGE_FIRST_SECTION(nt);
+  for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec) {
+    const uint32_t size = std::max(sec->Misc.VirtualSize, sec->SizeOfRawData);
+    if (rva >= sec->VirtualAddress && rva < sec->VirtualAddress + size) {
+      const uint32_t off = rva - sec->VirtualAddress + sec->PointerToRawData;
+      return off < f.size() ? off : 0;
+    }
+  }
+  return 0;
+}
+
+bool TestImports(size_t c) {
+  const wchar_t* const kFiles[] = {L"nbajam_ofe.exe", L"rexruntime.dll", L"rexgpu-xenos.dll"};
+  bool any_file = false, all_found = true;
+  for (const wchar_t* file : kFiles) {
+    std::string fname;
+    for (const wchar_t* p = file; *p; ++p) fname += char(*p);
+    std::ifstream in(PackageDir() / file, std::ios::binary);
+    if (!in) continue;
+    any_file = true;
+    std::vector<uint8_t> f((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (f.size() < 0x400) continue;
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(f.data());
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || size_t(dos->e_lfanew) + sizeof(IMAGE_NT_HEADERS64) > f.size()) continue;
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(f.data() + dos->e_lfanew);
+    const auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    uint32_t off = RvaToOffset(f, nt, dir.VirtualAddress);
+    if (!off) continue;
+    int dlls = 0, funcs = 0;
+    std::string missing;
+    for (auto* imp = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(f.data() + off);
+         reinterpret_cast<const uint8_t*>(imp + 1) <= f.data() + f.size() && imp->Name; ++imp) {
+      const uint32_t name_off = RvaToOffset(f, nt, imp->Name);
+      if (!name_off) break;
+      const std::string dll(reinterpret_cast<const char*>(f.data() + name_off));
+      ++dlls;
+      std::wstring wdll(dll.begin(), dll.end());
+      std::string lower = dll;
+      for (char& ch : lower) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+      // The game's own DLLs are what is being diagnosed; never load them here.
+      if (lower == "rexruntime.dll" || lower == "rexgpu-xenos.dll") continue;
+      HMODULE m = LoadLibraryW(wdll.c_str());
+      if (!m) m = LoadPackagedLibrary(wdll.c_str(), 0);
+      if (!m) {
+        missing += " " + dll + "(whole DLL, error " + std::to_string(GetLastError()) + ")";
+        all_found = false;
+        continue;
+      }
+      const uint32_t thunk_rva = imp->OriginalFirstThunk ? imp->OriginalFirstThunk : imp->FirstThunk;
+      uint32_t t = RvaToOffset(f, nt, thunk_rva);
+      for (; t && t + 8 <= f.size(); t += 8) {
+        uint64_t v;
+        std::memcpy(&v, f.data() + t, 8);
+        if (!v) break;
+        ++funcs;
+        FARPROC fn;
+        std::string what;
+        if (v & IMAGE_ORDINAL_FLAG64) {
+          fn = GetProcAddress(m, MAKEINTRESOURCEA(v & 0xFFFF));
+          what = "#" + std::to_string(v & 0xFFFF);
+        } else {
+          const uint32_t hn = RvaToOffset(f, nt, uint32_t(v));
+          if (!hn) continue;
+          what = reinterpret_cast<const char*>(f.data() + hn + 2);
+          fn = GetProcAddress(m, what.c_str());
+        }
+        if (!fn) {
+          missing += " " + dll + "!" + what;
+          all_found = false;
+        }
+      }
+    }
+    Note(c, "%s: %d functions from %d DLLs checked", fname.c_str(), funcs, dlls);
+    if (!missing.empty()) {
+      // Wrapped, since it can be long.
+      std::string line = "  MISSING:";
+      for (size_t at = 0; at < missing.size();) {
+        size_t sp = missing.find(' ', at + 1);
+        std::string word = missing.substr(at, sp == std::string::npos ? std::string::npos : sp - at);
+        if (line.size() + word.size() > 95) {
+          Note(c, "%s", line.c_str());
+          line = "   ";
+        }
+        line += word;
+        at = sp == std::string::npos ? missing.size() : sp;
+      }
+      Note(c, "%s", line.c_str());
+    }
+    WriteReport();
+  }
+  if (!any_file) Note(c, "no game files in this package");
+  return all_found;
+}
+
 // --- 8. the game's own DLLs -----------------------------------------------
 
 // Records the first fault while a DLL is loading: what it was, in which
@@ -837,6 +938,7 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
     const size_t gpu_check = AddCheck("Direct3D 12 on the CoreWindow");
     const size_t pad = AddCheck("Controller (press any button)");
     const size_t dlls = AddCheck("Windows DLLs on the console");
+    const size_t imports = AddCheck("Every function the game imports");
     const size_t game_dlls = AddCheck("The game's own DLLs");
 
     Finish(files, TestFiles(files) ? State::kPass : State::kFail);
@@ -844,6 +946,8 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
     Finish(commit, TestCommit(commit) ? State::kPass : State::kFail);
     Finish(trap, TestTrap(trap) ? State::kPass : State::kFail);
     Finish(dlls, TestDlls(dlls) ? State::kInfo : State::kFail);
+    WriteReport();
+    Finish(imports, TestImports(imports) ? State::kPass : State::kFail);
     WriteReport();
     Finish(game_dlls, TestPackageDlls(game_dlls) ? State::kPass : State::kFail);
     WriteReport();
