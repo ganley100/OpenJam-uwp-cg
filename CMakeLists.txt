@@ -127,4 +127,8 @@ add_custom_target(nbajam_ofe_fix_vectors
     COMMENT "Repairing vector instructions whose destination is also a source"
     VERBATIM)
 add_dependencies(nbajam_ofe_fix_vectors nbajam_ofe_codegen)
-add_dependencies(nbajam_ofe_recomp nbajam_ofe_fix_vectors)
+# nbajam_ofe_recomp only exists once generated/ has sources, so a clean
+# checkout configures, runs codegen, then reconfigures.
+if(TARGET nbajam_ofe_recomp)
+    add_dependencies(nbajam_ofe_recomp nbajam_ofe_fix_vectors)
+endif()
