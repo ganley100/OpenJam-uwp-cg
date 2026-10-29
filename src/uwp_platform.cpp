@@ -29,8 +29,13 @@
 #include <fstream>
 #include <string>
 
+#include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Storage.h>
+#include <winrt/Windows.UI.Core.h>
+#include <winrt/Windows.UI.Popups.h>
+
+#include <cstdlib>
 
 #include <rex/logging.h>
 
@@ -47,33 +52,68 @@ std::filesystem::path NbaUwpLocalState() {
 
 std::filesystem::path NbaUwpGameRoot() {
   namespace fs = std::filesystem;
-  const fs::path local = NbaUwpLocalState();
-  if (local.empty()) return {};
-  std::ofstream status(local / "status.txt");
-  const fs::path game = local / "game";
-  std::error_code ec;
-  if (fs::exists(game / "default.xex", ec)) {
-    status << "game: " << game.string() << "\n";
+  // Asked more than once while starting; the unpack must only happen once.
+  static bool decided = false;
+  static fs::path decided_root;
+  if (decided) return decided_root;
+  decided = true;
+  decided_root = []() -> fs::path {
+    const fs::path local = NbaUwpLocalState();
+    if (local.empty()) return {};
+    std::ofstream status(local / "status.txt");
+    const fs::path game = local / "game";
+    std::error_code ec;
+    if (fs::exists(game / "default.xex", ec)) {
+      status << "game: " << game.string() << "\n";
+      return game;
+    }
+    const fs::path container = NbaFindLiveContainer(local);
+    if (container.empty()) {
+      status << "No game yet. Copy the Xbox Live container for NBA JAM: On Fire\n"
+                "Edition (the 42-character file with no extension) into this\n"
+                "folder with Device Portal's File Explorer, then start the app\n"
+                "again.\n";
+      return {};
+    }
+    status << "unpacking " << container.filename().string() << " into "
+           << game.string() << "\n";
+    status.flush();
+    const int n = NbaUnpackLiveContainer(container, game);
+    if (n <= 0 || !fs::exists(game / "default.xex", ec)) {
+      status << "unpacking failed (" << n << " file(s))\n";
+      return {};
+    }
+    status << n << " file(s) unpacked. The container can be deleted now.\n";
     return game;
+  }();
+  return decided_root;
+}
+
+void NbaUwpNoGame() {
+  using namespace winrt::Windows::UI;
+  const std::wstring local = NbaUwpLocalState().wstring();
+  const std::wstring text =
+      L"No game found.\n\n"
+      L"Copy your Xbox Live download of NBA JAM: On Fire Edition (the file "
+      L"with a 42-character name and no extension, about 850 MB) into this "
+      L"app's LocalState folder with Device Portal's File Explorer:\n\n" +
+      local +
+      L"\n\nThen start the app again. The first start after that unpacks the "
+      L"game, which takes a minute or two.";
+  bool done = false;
+  try {
+    Popups::MessageDialog dialog(winrt::hstring(text), L"NBA JAM: On Fire Edition");
+    dialog.ShowAsync().Completed([&done](auto&&, auto&&) { done = true; });
+    // Pump the window's events here, on its thread, until the dialog closes.
+    auto dispatcher = Core::CoreWindow::GetForCurrentThread().Dispatcher();
+    while (!done) {
+      dispatcher.ProcessEvents(Core::CoreProcessEventsOption::ProcessOneIfPresent);
+      Sleep(16);
+    }
+  } catch (...) {
   }
-  const fs::path container = NbaFindLiveContainer(local);
-  if (container.empty()) {
-    status << "No game yet. Copy the Xbox Live container for NBA JAM: On Fire\n"
-              "Edition (the 42-character file with no extension) into this\n"
-              "folder with Device Portal's File Explorer, then start the app\n"
-              "again.\n";
-    return {};
-  }
-  status << "unpacking " << container.filename().string() << " into "
-         << game.string() << "\n";
-  status.flush();
-  const int n = NbaUnpackLiveContainer(container, game);
-  if (n <= 0 || !fs::exists(game / "default.xex", ec)) {
-    status << "unpacking failed (" << n << " file(s))\n";
-    return {};
-  }
-  status << n << " file(s) unpacked. The container can be deleted now.\n";
-  return game;
+  winrt::Windows::ApplicationModel::Core::CoreApplication::Exit();
+  std::exit(0);
 }
 
 bool NbaModList(std::vector<NbaMod>* mods, size_t* active) {

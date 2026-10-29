@@ -47,6 +47,13 @@ class NbajamOfeApp : public rex::ReXApp {
     // game to start yet - that is the whole point of asking. See
     // src/unpack_container.cpp.
     NbaUnpackIfAsked();
+#if NBAJAM_UWP
+    // Found or unpacked now, before anything is set up, so a console with no
+    // game on it gets told so instead of a splash screen that closes.
+    if (NbaUwpGameRoot().empty()) {
+      NbaUwpNoGame();
+    }
+#endif
     return std::unique_ptr<NbajamOfeApp>(new NbajamOfeApp(ctx, "nbajam_ofe",
         PPCImageConfig));
   }

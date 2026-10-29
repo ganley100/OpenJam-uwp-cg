@@ -1,0 +1,34 @@
+diff --git a/src/ui/windowed_app_main_uwp.cpp b/src/ui/windowed_app_main_uwp.cpp
+index 65b9e40..efd15a9 100644
+--- a/src/ui/windowed_app_main_uwp.cpp
++++ b/src/ui/windowed_app_main_uwp.cpp
+@@ -15,12 +15,14 @@
+ #include <windows.h>
+ 
+ #include <cstdlib>
++#include <filesystem>
+ #include <map>
+ #include <memory>
+ #include <string>
+ 
+ #include <winrt/Windows.ApplicationModel.Core.h>
+ #include <winrt/Windows.Foundation.h>
++#include <winrt/Windows.Storage.h>
+ #include <winrt/Windows.UI.Core.h>
+ 
+ #include <rex/cvar.h>
+@@ -36,6 +38,14 @@ using winrt::Windows::UI::Core::CoreWindow;
+ // An app has no command line. Everything that would be passed on one comes
+ // from the app's own defaults (ReXApp::OnPreSetup) or a config file.
+ int RunWindowedApp(::IUnknown* core_window) {
++  // An app starts in its install folder, which is read-only, and the runtime
++  // makes its logs folder in the current one. Work from LocalState instead,
++  // so logs (and anything else written relative) land somewhere writable.
++  try {
++    std::filesystem::current_path(std::filesystem::path(std::wstring(
++        winrt::Windows::Storage::ApplicationData::Current().LocalFolder().Path())));
++  } catch (...) {
++  }
+   char arg0[] = "app";
+   char* argv[] = {arg0, nullptr};
+   rex::cvar::Init(1, argv);
