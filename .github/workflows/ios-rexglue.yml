@@ -111,6 +111,13 @@ jobs:
           "$cli" --help | head -5 || true
           echo "REXGLUE_CLI=$cli" >> "$GITHUB_ENV"
 
+      # The manifest names the executable as ../Root/default.xex.
+      - name: Game executable
+        if: inputs.stage == 'game'
+        run: |
+          mkdir -p ../Root
+          cp game/default.xex ../Root/default.xex
+
       - name: Generate rexglue.cmake
         if: inputs.stage == 'game'
         run: |
