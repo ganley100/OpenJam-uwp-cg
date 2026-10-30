@@ -41,7 +41,9 @@ Copy-Item (Join-Path $here "nbajam_ofe.toml") $layout
 
 $meta = Join-Path $repo "metadata"
 if (Test-Path $meta) { Copy-Item -Recurse $meta (Join-Path $layout "metadata") }
-Copy-Item -Recurse (Join-Path $repo "packaging\xbox\Assets") (Join-Path $layout "Assets")
+# The tiles: the mods' carry a banner with the mod's name.
+$assets = if ($Variant -eq "base") { "Assets" } else { "Assets-$Variant" }
+Copy-Item -Recurse (Join-Path $repo "packaging\xbox\$assets") (Join-Path $layout "Assets")
 # The identity is how the app knows which it is (src/uwp_platform.cpp).
 $v = @{
     "base"    = @{ Identity = "OpenJam.NBAJamOFE";         Name = "NBA JAM: On Fire Edition";        Short = "NBA JAM";         File = "NBAJamOFE" }
