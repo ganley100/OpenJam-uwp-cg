@@ -1,0 +1,81 @@
+# ReXGlue v0.10.0 for iOS (arm64), from source, with the Xbox patches (no-ops
+# outside REXGLUE_UWP) and the iOS ones in ios/rexglue/patches. Started by
+# hand: Mac minutes count ten times against a private repository's allowance,
+# so each stage is run only as far as it is needed.
+#
+#   stage=configure   CMake only, a couple of minutes
+#   stage=sdk         configure and build the SDK, collecting every error
+
+name: iOS ReXGlue
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "configure or sdk"
+        required: true
+        default: configure
+
+env:
+  REXGLUE_TAG: v0.10.0
+  CONFIG: Release
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ReXGlue source
+        run: |
+          git clone --depth 1 --branch "$REXGLUE_TAG" --recurse-submodules --shallow-submodules \
+            https://github.com/rexglue/rexglue-sdk "$RUNNER_TEMP/rexglue-sdk"
+
+      - name: Apply patches
+        run: |
+          for p in xbox/rexglue/patches/*.patch ios/rexglue/patches/*.patch; do
+            [ -f "$p" ] || continue
+            echo "applying $p"
+            git -C "$RUNNER_TEMP/rexglue-sdk" apply --whitespace=nowarn "$PWD/$p"
+          done
+
+      - name: Toolchain
+        run: |
+          brew install ninja ccache || true
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Configure SDK (iOS)
+        working-directory: ${{ runner.temp }}/rexglue-sdk
+        run: |
+          cmake -S . -B out/build/ios -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=$CONFIG \
+            -DCMAKE_INSTALL_PREFIX="$PWD/out/install/ios" \
+            -DREXGLUE_ENABLE_TRACY=OFF 2>&1 | tee "$RUNNER_TEMP/configure.log"
+          test ${PIPESTATUS[0]} -eq 0
+
+      - name: Build SDK (iOS)
+        if: inputs.stage != 'configure'
+        working-directory: ${{ runner.temp }}/rexglue-sdk
+        run: |
+          set +e
+          cmake --build out/build/ios --target install -- -k 0 > "$RUNNER_TEMP/build.log" 2>&1
+          code=$?
+          echo "===== errors ====="
+          grep -E "error:|error LNK|Undefined symbols|ld: " "$RUNNER_TEMP/build.log" | sort -u | head -300
+          echo "===== tail ====="
+          tail -30 "$RUNNER_TEMP/build.log"
+          exit $code
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-rexglue-logs
+          path: |
+            ${{ runner.temp }}/configure.log
+            ${{ runner.temp }}/build.log
+          retention-days: 7
