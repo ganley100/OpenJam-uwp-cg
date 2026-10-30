@@ -1,0 +1,174 @@
+diff --git a/include/rex/audio/silent/silent_audio_system.h b/include/rex/audio/silent/silent_audio_system.h
+new file mode 100644
+index 0000000..fd478ea
+--- /dev/null
++++ b/include/rex/audio/silent/silent_audio_system.h
+@@ -0,0 +1,35 @@
++/**
++ * @file        audio/silent/silent_audio_system.h
++ * @brief       An audio backend that plays nothing, in real time
++ *
++ * @remarks     OpenJam patch for the UWP build (REXGLUE_UWP), which has no
++ *              SDL3. Unlike the nop backend, which refuses to create a driver,
++ *              this accepts every frame the guest submits and consumes it at
++ *              the rate a real device would - 256 samples at 48 kHz - so a
++ *              title's audio engine runs as it would with sound. NBA JAM does
++ *              not survive the refusal: its audio engine is left half built,
++ *              and a streaming thread calls into it and hits a pure virtual
++ *              call.
++ */
++
++#pragma once
++
++#include <rex/audio/audio_system.h>
++
++namespace rex::audio::silent {
++
++class SilentAudioSystem : public AudioSystem {
++ public:
++  explicit SilentAudioSystem(runtime::FunctionDispatcher* function_dispatcher);
++  ~SilentAudioSystem() override;
++
++  static bool IsAvailable() { return true; }
++
++  static std::unique_ptr<AudioSystem> Create(runtime::FunctionDispatcher* function_dispatcher);
++
++  X_STATUS CreateDriver(size_t index, rex::thread::Semaphore* semaphore,
++                        AudioDriver** out_driver) override;
++  void DestroyDriver(AudioDriver* driver) override;
++};
++
++}  // namespace rex::audio::silent
+diff --git a/src/audio/CMakeLists.txt b/src/audio/CMakeLists.txt
+index a49d9ec..f3cb115 100644
+--- a/src/audio/CMakeLists.txt
++++ b/src/audio/CMakeLists.txt
+@@ -11,6 +11,8 @@ add_library(rexaudio OBJECT
+     xma_register_file.cpp
+     # NOP backend (always available)
+     nop/nop_audio_system.cpp
++    # Silent backend: consumes frames in real time (OpenJam)
++    silent/silent_audio_system.cpp
+ )
+ # OpenJam: a UWP build has no SDL3, and so no sound yet.
+ if(NOT REXGLUE_UWP)
+diff --git a/src/audio/silent/silent_audio_system.cpp b/src/audio/silent/silent_audio_system.cpp
+new file mode 100644
+index 0000000..68c5dc4
+--- /dev/null
++++ b/src/audio/silent/silent_audio_system.cpp
+@@ -0,0 +1,90 @@
++/**
++ * @file        audio/silent/silent_audio_system.cpp
++ * @brief       An audio backend that plays nothing, in real time
++ *
++ * @remarks     OpenJam patch for the UWP build (REXGLUE_UWP). See the header.
++ */
++
++#include <rex/audio/silent/silent_audio_system.h>
++
++#include <atomic>
++#include <chrono>
++#include <thread>
++
++#include <rex/audio/audio_driver.h>
++#include <rex/thread.h>
++
++namespace rex::audio::silent {
++
++namespace {
++
++// Consumes submitted frames at the rate a device would play them, and for
++// each one tells the audio system it may ask the guest for another - which is
++// all a real driver's callback does besides playing it.
++class SilentAudioDriver : public AudioDriver {
++ public:
++  SilentAudioDriver(memory::Memory* memory, rex::thread::Semaphore* semaphore)
++      : AudioDriver(memory), semaphore_(semaphore), thread_([this] { Run(); }) {}
++
++  ~SilentAudioDriver() override {
++    running_ = false;
++    if (thread_.joinable()) {
++      thread_.join();
++    }
++  }
++
++  void SubmitFrame(uint32_t /*samples_ptr*/) override { pending_.fetch_add(1); }
++
++ private:
++  // 256 samples per channel at 48 kHz.
++  static constexpr std::chrono::microseconds kFrame{5333};
++
++  void Run() {
++    auto next = std::chrono::steady_clock::now();
++    while (running_) {
++      next += kFrame;
++      std::this_thread::sleep_until(next);
++      // Fallen far behind (a suspend, a debugger): start again from now
++      // rather than releasing a burst.
++      const auto now = std::chrono::steady_clock::now();
++      if (now - next > kFrame * 32) {
++        next = now;
++      }
++      int pending = pending_.load();
++      while (pending > 0 && !pending_.compare_exchange_weak(pending, pending - 1)) {
++      }
++      if (pending > 0) {
++        semaphore_->Release(1, nullptr);
++      }
++    }
++  }
++
++  rex::thread::Semaphore* semaphore_;
++  std::atomic<int> pending_{0};
++  std::atomic<bool> running_{true};
++  std::thread thread_;
++};
++
++}  // namespace
++
++std::unique_ptr<AudioSystem> SilentAudioSystem::Create(
++    runtime::FunctionDispatcher* function_dispatcher) {
++  return std::make_unique<SilentAudioSystem>(function_dispatcher);
++}
++
++SilentAudioSystem::SilentAudioSystem(runtime::FunctionDispatcher* function_dispatcher)
++    : AudioSystem(function_dispatcher) {}
++
++SilentAudioSystem::~SilentAudioSystem() = default;
++
++X_STATUS SilentAudioSystem::CreateDriver(size_t /*index*/, rex::thread::Semaphore* semaphore,
++                                         AudioDriver** out_driver) {
++  *out_driver = new SilentAudioDriver(memory_, semaphore);
++  return X_STATUS_SUCCESS;
++}
++
++void SilentAudioSystem::DestroyDriver(AudioDriver* driver) {
++  delete driver;
++}
++
++}  // namespace rex::audio::silent
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index ca3168c..428f31d 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -27,7 +27,7 @@
+ #include <rex/ui/overlay/settings_overlay.h>
+ #include <rex/audio/audio_system.h>
+ #if REXGLUE_UWP
+-#include <rex/audio/nop/nop_audio_system.h>
++#include <rex/audio/silent/silent_audio_system.h>
+ #else
+ #include <rex/audio/sdl/sdl_audio_system.h>
+ #endif
+@@ -327,7 +327,9 @@ bool ReXApp::SetupPresentation() {
+   config_.gpu_plugin = REXCVAR_GET(gpu_plugin);
+ #if REXGLUE_UWP
+   // OpenJam: SDL3 is the only real audio backend, and a UWP build has none.
+-  config_.audio_factory = REX_AUDIO_BACKEND(rex::audio::nop::NopAudioSystem);
++  // The nop backend refuses the guest's audio client, which a title may not
++  // survive; the silent one runs it in real time and plays nothing.
++  config_.audio_factory = REX_AUDIO_BACKEND(rex::audio::silent::SilentAudioSystem);
+ #else
+   config_.audio_factory = REX_AUDIO_BACKEND(rex::audio::sdl::SDLAudioSystem);
+ #endif
