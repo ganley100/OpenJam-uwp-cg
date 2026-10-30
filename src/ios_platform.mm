@@ -144,3 +144,9 @@ void NbaStartWatchdog() {}
 void NbaWatchdogWatchWindow(void*) {}
 
 void NbaWatchdogCreate(rex::ui::ImGuiDrawer*) {}
+
+// The guard around indirect calls in the generated code reports to these;
+// they are Windows diagnostics in nbajam_hooks.cpp, which is not built here.
+struct PPCContext;
+void NbaTraceIndirect(uint32_t, PPCContext&) {}
+void NbaCheckR1(uint32_t, uint32_t, PPCContext&) {}

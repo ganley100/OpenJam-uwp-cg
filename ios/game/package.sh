@@ -49,6 +49,10 @@ sips -z 180 180 "$src" --out "$app/AppIcon60x60@3x.png" >/dev/null
 for lib in "$app"/Frameworks/*.dylib; do
   install_name_tool -id "@rpath/$(basename "$lib")" "$lib" 2>/dev/null || true
 done
+# SDL has to be one copy, the runtime's: a second in the executable would
+# not see the window's events.
+echo "SDL functions defined in the executable: $(nm -gU "$app/nbajam_ofe" | grep -c ' _SDL_' || true)"
+echo "SDL functions exported by the runtime:   $(nm -gU "$app/Frameworks/librexruntime.dylib" | grep -c ' _SDL_' || true)"
 echo "executable links:"
 otool -L "$app/nbajam_ofe"
 otool -l "$app/nbajam_ofe" | grep -A2 LC_RPATH || true
