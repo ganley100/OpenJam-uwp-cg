@@ -32,6 +32,15 @@ int NbaUnpackLiveContainer(
 // `--unpack <container> [--into <folder>]` on the command line: unpack the
 // container and leave without starting the game. Does nothing and returns if
 // the command line does not ask for it. Called before anything is set up.
+// The first .iso in `folder`, or nothing.
+std::filesystem::path NbaFindDiscImage(const std::filesystem::path& folder);
+
+// Unpacks an Xbox 360 disc image (.iso) into `into`. Returns the file count,
+// or -1.
+int NbaUnpackDiscImage(
+    const std::filesystem::path& image, const std::filesystem::path& into,
+    const std::function<void(const std::string&, int, int)>& say = nullptr);
+
 void NbaUnpackIfAsked();
 
 // The first .ojpk in `folder`, or nothing. See tools/xbox_pack.py.

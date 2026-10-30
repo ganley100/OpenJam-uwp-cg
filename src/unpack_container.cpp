@@ -21,12 +21,14 @@
 #include <shellapi.h>
 #endif
 
+#include <rex/filesystem/devices/disc_image_device.h>
 #include <rex/filesystem/devices/stfs_container_device.h>
 #include <rex/filesystem/entry.h>
 #include <rex/filesystem/file.h>
 #include <rex/logging.h>
 
 #include <algorithm>
+#include <cctype>
 #include <ostream>
 #include <cstdint>
 #include <fstream>
@@ -106,15 +108,12 @@ fs::path NbaFindLiveContainer(const fs::path& folder) {
   return {};
 }
 
-int NbaUnpackLiveContainer(
-    const fs::path& container, const fs::path& into,
-    const std::function<void(const std::string&, int, int)>& say) {
-  rex::filesystem::StfsContainerDevice device("", container);
-  if (!device.Initialize()) {
-    REXLOG_ERROR("unpack: {} would not open as an Xbox Live container",
-                 container.string());
-    return -1;
-  }
+namespace {
+
+// Everything in a device the runtime has opened, written out into `into`.
+int UnpackDevice(rex::filesystem::Device& device, const fs::path& container,
+                 const fs::path& into,
+                 const std::function<void(const std::string&, int, int)>& say) {
   rex::filesystem::Entry* root = device.ResolvePath("/");
   if (!root) {
     REXLOG_ERROR("unpack: {} has nothing in it", container.string());
@@ -202,6 +201,44 @@ int NbaUnpackLiveContainer(
   REXLOG_INFO("unpack: {} file(s) out of {} and into {}", written,
               container.filename().string(), into.string());
   return written;
+}
+
+}  // namespace
+
+int NbaUnpackLiveContainer(
+    const fs::path& container, const fs::path& into,
+    const std::function<void(const std::string&, int, int)>& say) {
+  rex::filesystem::StfsContainerDevice device("", container);
+  if (!device.Initialize()) {
+    REXLOG_ERROR("unpack: {} would not open as an Xbox Live container",
+                 container.string());
+    return -1;
+  }
+  return UnpackDevice(device, container, into, say);
+}
+
+// A disc image is read by the runtime's own disc reader, the one that would
+// mount it, and written out the same way as a download.
+fs::path NbaFindDiscImage(const fs::path& folder) {
+  std::error_code ec;
+  for (const auto& e : fs::directory_iterator(folder, ec)) {
+    if (ec) break;
+    std::string ext = e.path().extension().string();
+    for (char& c : ext) c = char(std::tolower(static_cast<unsigned char>(c)));
+    if (ext == ".iso" && e.is_regular_file(ec)) return e.path();
+  }
+  return {};
+}
+
+int NbaUnpackDiscImage(
+    const fs::path& image, const fs::path& into,
+    const std::function<void(const std::string&, int, int)>& say) {
+  rex::filesystem::DiscImageDevice device("", image);
+  if (!device.Initialize()) {
+    REXLOG_ERROR("unpack: {} would not open as an Xbox 360 disc image", image.string());
+    return -1;
+  }
+  return UnpackDevice(device, image, into, say);
 }
 
 void NbaUnpackIfAsked() {

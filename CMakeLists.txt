@@ -69,7 +69,20 @@ if(NBAJAM_UWP)
     set(REXPORT_CRASH_REPORT OFF CACHE BOOL "" FORCE)
     set(REXPORT_GUEST_PROFILER OFF CACHE BOOL "" FORCE)
     list(REMOVE_ITEM NBAJAMOFE_SOURCES src/mod_swap.cpp src/watchdog.cpp)
-    list(APPEND NBAJAMOFE_SOURCES src/uwp_platform.cpp)
+    list(APPEND NBAJAMOFE_SOURCES src/uwp_platform.cpp src/ps3_mod.cpp)
+
+    # The mod apps open PS3 mods themselves (src/ps3_mod.cpp), whose archives
+    # are zlib inside. miniz is zlib in one file.
+    enable_language(C)
+    include(FetchContent)
+    FetchContent_Declare(miniz
+        URL https://github.com/richgel999/miniz/releases/download/3.0.2/miniz-3.0.2.zip
+        URL_HASH SHA256=ada38db0b703a56d3dd6d57bf84a9c5d664921d870d8fea4db153979fb5332c5)
+    FetchContent_MakeAvailable(miniz)   # just the sources; it has no CMake of its own
+    add_library(nbajam_miniz STATIC ${miniz_SOURCE_DIR}/miniz.c)
+    target_include_directories(nbajam_miniz PUBLIC ${miniz_SOURCE_DIR})
+    target_compile_definitions(nbajam_miniz PRIVATE MINIZ_NO_STDIO MINIZ_NO_TIME
+        MINIZ_NO_ARCHIVE_APIS)
 endif()
 
 # iPhone, against a ReXGlue built for iOS with the patches in
@@ -120,7 +133,7 @@ if(NBAJAM_UWP)
     # guest function (sub_<address>) it is in.
     target_link_options(nbajam_ofe PRIVATE "LINKER:/MAP")
     # xinputuap.lib is XInput 1.4 as an app links it.
-    target_link_libraries(nbajam_ofe PRIVATE xinputuap.lib)
+    target_link_libraries(nbajam_ofe PRIVATE xinputuap.lib nbajam_miniz)
 endif()
 
 if(NBAJAM_IOS)
