@@ -108,7 +108,7 @@ struct XEntry {
 
 bool XStat(const fs::path& p, XEntry* out) {
   WIN32_FILE_ATTRIBUTE_DATA d{};
-  if (!GetFileAttributesExFromApp(p.c_str(), GetFileExInfoStandard, &d)) return false;
+  if (!GetFileAttributesExFromAppW(p.c_str(), GetFileExInfoStandard, &d)) return false;
   out->name = p.filename().wstring();
   out->dir = (d.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
   out->size = uint64_t(d.nFileSizeHigh) << 32 | d.nFileSizeLow;
@@ -124,7 +124,7 @@ bool XIsDir(const fs::path& p) {
 std::vector<XEntry> XList(const fs::path& dir) {
   std::vector<XEntry> out;
   WIN32_FIND_DATAW fd{};
-  HANDLE h = FindFirstFileExFromApp((dir / L"*").c_str(), FindExInfoBasic, &fd,
+  HANDLE h = FindFirstFileExFromAppW((dir / L"*").c_str(), FindExInfoBasic, &fd,
                                     FindExSearchNameMatch, nullptr, 0);
   if (h == INVALID_HANDLE_VALUE) return out;
   do {
@@ -144,10 +144,10 @@ std::vector<XEntry> XList(const fs::path& dir) {
 bool XCopy(const fs::path& from, const fs::path& to) {
   std::error_code ec;
   fs::create_directories(to.parent_path(), ec);
-  HANDLE in = CreateFile2FromApp(from.c_str(), GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING,
+  HANDLE in = CreateFile2FromAppW(from.c_str(), GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING,
                                  nullptr);
   if (in == INVALID_HANDLE_VALUE) return false;
-  HANDLE out = CreateFile2FromApp(to.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
+  HANDLE out = CreateFile2FromAppW(to.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
   if (out == INVALID_HANDLE_VALUE) {
     CloseHandle(in);
     return false;
