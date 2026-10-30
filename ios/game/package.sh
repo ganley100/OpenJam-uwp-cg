@@ -4,6 +4,9 @@
 #
 #   package.sh <build dir with nbajam_ofe> <SDK install prefix> <out dir> <version> [base|2020s|Legends]
 #
+# with MOLTENVK_FRAMEWORK set to the ios-arm64 MoltenVK.framework from
+# Khronos' MoltenVK-ios.tar release.
+#
 # The app is only the program: the executable, the runtime libraries in
 # Frameworks, MoltenVK, and the achievement data. The game goes in the app's
 # folder in the Files app and is unpacked on first launch
@@ -25,10 +28,10 @@ app=$stage/Payload/nbajam_ofe.app
 rm -rf "$stage" && mkdir -p "$app/Frameworks"
 
 cp "$build/nbajam_ofe" "$app/"
-# The runtime and the graphics plugin are built beside the executable; MoltenVK
-# comes from the SDK.
+# The runtime and the graphics plugin are built beside the executable;
+# MoltenVK is Khronos' prebuilt iOS framework ($MOLTENVK_FRAMEWORK).
 find "$build" -maxdepth 1 -name '*.dylib' -exec cp {} "$app/Frameworks/" \;
-cp "$prefix/lib/libMoltenVK.dylib" "$app/Frameworks/"
+cp -R "$MOLTENVK_FRAMEWORK" "$app/Frameworks/MoltenVK.framework"
 cp "$repo/xbox/game/nbajam_ofe.toml" "$app/"
 [ -d "$repo/metadata" ] && cp -R "$repo/metadata" "$app/metadata"
 
@@ -51,7 +54,9 @@ otool -L "$app/nbajam_ofe"
 otool -l "$app/nbajam_ofe" | grep -A2 LC_RPATH || true
 
 # Sideloadly re-signs; an ad-hoc signature keeps the bundle well formed.
-for lib in "$app"/Frameworks/*.dylib; do codesign --force --sign - "$lib"; done
+for lib in "$app"/Frameworks/*.dylib "$app/Frameworks/MoltenVK.framework"; do
+  codesign --force --sign - "$lib"
+done
 codesign --force --sign - "$app"
 
 (cd "$stage" && zip -qry "$out/${file}_${version}.ipa" Payload)

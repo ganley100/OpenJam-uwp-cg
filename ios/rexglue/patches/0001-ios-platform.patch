@@ -14,25 +14,18 @@ index 0956592..91219bc 100644
      if(REX_TARGET_PROCESSOR MATCHES "AMD64|x86_64")
          set(REX_PLATFORM "mac-amd64")
 diff --git a/cmake/rexglueConfig.cmake.in b/cmake/rexglueConfig.cmake.in
-index ef10d9c..3fcc909 100644
+index ef10d9c..09e1641 100644
 --- a/cmake/rexglueConfig.cmake.in
 +++ b/cmake/rexglueConfig.cmake.in
-@@ -24,12 +24,14 @@ set(REXGLUE_USE_VULKAN @REXGLUE_USE_VULKAN@)
+@@ -24,7 +24,7 @@ set(REXGLUE_USE_VULKAN @REXGLUE_USE_VULKAN@)
  if(REXGLUE_USE_VULKAN)
      find_dependency(VulkanHeaders CONFIG)
      find_dependency(VulkanMemoryAllocator CONFIG)
 -    if(APPLE)
-+    if(APPLE AND NOT IOS)  # OpenJam: iOS has no loader
++    if(APPLE AND NOT IOS)  # OpenJam: iOS has no loader, and its own MoltenVK
          if(NOT TARGET rex::vulkan-loader)
              add_library(rex::vulkan-loader SHARED IMPORTED)
              set_target_properties(rex::vulkan-loader PROPERTIES
-                 IMPORTED_LOCATION "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/libvulkan.1.dylib")
-         endif()
-+    endif()
-+    if(APPLE)
- 
-         if(NOT TARGET rex::moltenvk)
-             add_library(rex::moltenvk SHARED IMPORTED)
 diff --git a/cmake/rexglue_helpers.cmake b/cmake/rexglue_helpers.cmake
 index bf28a3f..ae05143 100644
 --- a/cmake/rexglue_helpers.cmake
@@ -63,21 +56,16 @@ index bf28a3f..ae05143 100644
          # macOS analogue of $ORIGIN: resolve @rpath dylibs (librexruntime,
          # libTracyClient, ...) next to the executable. Pairs with the runtime
 diff --git a/cmake/rexglue_install.cmake b/cmake/rexglue_install.cmake
-index 4b52d57..a7d5f49 100644
+index 4b52d57..a20d0b8 100644
 --- a/cmake/rexglue_install.cmake
 +++ b/cmake/rexglue_install.cmake
-@@ -139,11 +139,13 @@ if(REXGLUE_USE_D3D12)
+@@ -138,7 +138,7 @@ if(REXGLUE_USE_D3D12)
+     )
  endif()
  
- if(APPLE AND REXGLUE_USE_VULKAN)
-+    if(NOT IOS)  # OpenJam: iOS has no loader
+-if(APPLE AND REXGLUE_USE_VULKAN)
++if(APPLE AND NOT IOS AND REXGLUE_USE_VULKAN)  # OpenJam: iOS brings its own MoltenVK
      install(FILES "$<TARGET_FILE:Vulkan::Loader>"
-         DESTINATION ${CMAKE_INSTALL_LIBDIR}
-         CONFIGURATIONS Release
-         RENAME libvulkan.1.dylib
-     )
-+    endif()
-     install(FILES "$<TARGET_FILE:MoltenVK::MoltenVK>"
          DESTINATION ${CMAKE_INSTALL_LIBDIR}
          CONFIGURATIONS Release
 diff --git a/include/rex/platform.h b/include/rex/platform.h
@@ -194,7 +182,7 @@ index 428f31d..2b5953a 100644
  #else
      log_config.log_dir = (exe_dir / "logs").string();
 diff --git a/src/ui/vulkan/vulkan_instance.cpp b/src/ui/vulkan/vulkan_instance.cpp
-index 914b311..369fc09 100644
+index 914b311..1731c6d 100644
 --- a/src/ui/vulkan/vulkan_instance.cpp
 +++ b/src/ui/vulkan/vulkan_instance.cpp
 @@ -50,6 +50,12 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
@@ -205,7 +193,7 @@ index 914b311..369fc09 100644
 +  // OpenJam: an iOS app carries MoltenVK in its Frameworks folder and has no
 +  // loader; MoltenVK exports vkGetInstanceProcAddr itself.
 +  loader_candidates.insert(loader_candidates.begin(),
-+                           "@executable_path/Frameworks/libMoltenVK.dylib");
++                           "@executable_path/Frameworks/MoltenVK.framework/MoltenVK");
 +#endif
    loader_candidates.emplace_back(platform::lib_names::kVulkanLoader);
    loader_candidates.emplace_back("libvulkan.dylib");
@@ -244,7 +232,7 @@ index 77bb1dc..8acd1ef 100644
  }
  
 diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
-index c3262d9..36f223d 100644
+index c3262d9..b9b9984 100644
 --- a/thirdparty/CMakeLists.txt
 +++ b/thirdparty/CMakeLists.txt
 @@ -49,7 +49,9 @@ if(REXGLUE_USE_VULKAN)
@@ -252,25 +240,23 @@ index c3262d9..36f223d 100644
          spirv-headers spirv-tools glslang
      )
 -    if(APPLE)
-+    if(IOS)  # OpenJam: MoltenVK is loaded directly on iOS
-+        list(APPEND REQUIRED_SUBMODULES moltenvk)
-+    elseif(APPLE)
++    # OpenJam: iOS takes Khronos' prebuilt MoltenVK framework instead; its
++    # CMake build is macOS only.
++    if(APPLE AND NOT IOS)
          list(APPEND REQUIRED_SUBMODULES vulkan-loader moltenvk)
      endif()
  endif()
-@@ -210,8 +212,10 @@ if(REXGLUE_USE_VULKAN)
-         set(LOADER_CODEGEN OFF CACHE BOOL "" FORCE)
-         string(REGEX REPLACE "\\.[0-9]+$" "" VulkanHeaders_VERSION
-             "${REXGLUE_VULKAN_SDK_VERSION}")
--        add_subdirectory(vulkan-loader EXCLUDE_FROM_ALL)
--        set_target_properties(vulkan PROPERTIES EXCLUDE_FROM_ALL FALSE)
-+        if(NOT IOS)  # OpenJam: no loader on iOS, the app opens MoltenVK itself
-+            add_subdirectory(vulkan-loader EXCLUDE_FROM_ALL)
-+            set_target_properties(vulkan PROPERTIES EXCLUDE_FROM_ALL FALSE)
-+        endif()
+@@ -201,7 +203,9 @@ if(REXGLUE_USE_VULKAN)
+     set(VMA_ENABLE_INSTALL ON CACHE BOOL "" FORCE)
+     add_subdirectory(vulkan-memory-allocator)
  
-         set(MVK_BUILD_SHADER_CONVERTER_TOOL OFF CACHE BOOL "" FORCE)
-         set(MVK_EXCLUDE_SPIRV_TOOLS ON CACHE BOOL "" FORCE)
+-    if(APPLE)
++    # OpenJam: not on iOS, which has no loader and takes Khronos' prebuilt
++    # MoltenVK framework (its CMake build is macOS only).
++    if(APPLE AND NOT IOS)
+         # Build the loader and MoltenVK revisions shipped by the pinned SDK.
+         # They remain runtime-loaded; no Vulkan implementation is linked into
+         # rexglue itself.
 @@ -276,7 +280,11 @@ set(SDL_FILESYSTEM OFF CACHE BOOL "" FORCE)
  set(SDL_LOCALE ON CACHE BOOL "" FORCE)
  set(SDL_FILE OFF CACHE BOOL "" FORCE)

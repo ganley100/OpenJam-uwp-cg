@@ -151,6 +151,18 @@ jobs:
           ccache -s || true
           exit $code
 
+      # MoltenVK's CMake build is macOS only; iOS takes Khronos' own build,
+      # the one the pinned SDK revision was released as.
+      - name: MoltenVK (iOS)
+        if: inputs.stage == 'game'
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/mvk.tar" \
+            https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.1/MoltenVK-ios.tar
+          tar xf "$RUNNER_TEMP/mvk.tar" -C "$RUNNER_TEMP"
+          fw="$RUNNER_TEMP/MoltenVK/MoltenVK/dynamic/MoltenVK.xcframework/ios-arm64/MoltenVK.framework"
+          test -f "$fw/MoltenVK"
+          echo "MOLTENVK_FRAMEWORK=$fw" >> "$GITHUB_ENV"
+
       - name: Package
         if: inputs.stage == 'game'
         run: |
