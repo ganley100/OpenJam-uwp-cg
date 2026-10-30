@@ -73,7 +73,7 @@ jobs:
         run: |
           cmake -S . -B out/build/ios -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.3 \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE=$CONFIG \
@@ -124,7 +124,7 @@ jobs:
         run: |
           cmake -S . -B out/build/game-ios -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.3 \
             -DCMAKE_BUILD_TYPE=$CONFIG -DNBAJAM_IOS=ON \
             -DNBAJAM_CODEGEN_CLI="$REXGLUE_CLI" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
