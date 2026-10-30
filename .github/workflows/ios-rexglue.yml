@@ -1,10 +1,14 @@
-# ReXGlue v0.10.0 for iOS (arm64), from source, with the Xbox patches (no-ops
-# outside REXGLUE_UWP) and the iOS ones in ios/rexglue/patches. Started by
-# hand: Mac minutes count ten times against a private repository's allowance,
-# so each stage is run only as far as it is needed.
+# The iPhone build: ReXGlue v0.10.0 for iOS (arm64), from source, with the
+# Xbox patches (no-ops outside REXGLUE_UWP) and the iOS ones in
+# ios/rexglue/patches, then the game against it, packed as unsigned .ipa
+# files for Sideloadly.
+#
+# Started by hand: Mac minutes count ten times against a private
+# repository's allowance, so each run goes only as far as it is asked to.
 #
 #   stage=configure   CMake only, a couple of minutes
 #   stage=sdk         configure and build the SDK, collecting every error
+#   stage=game        all of it: SDK, game, and the three .ipa files
 
 name: iOS ReXGlue
 
@@ -12,20 +16,40 @@ on:
   workflow_dispatch:
     inputs:
       stage:
-        description: "configure or sdk"
+        description: "configure, sdk or game"
         required: true
-        default: configure
+        default: game
+      version:
+        description: "app version"
+        required: true
+        default: "1.0.1"
 
 env:
   REXGLUE_TAG: v0.10.0
   CONFIG: Release
+  CCACHE_DIR: ${{ github.workspace }}/../ccache
+  CCACHE_MAXSIZE: 4G
+  CCACHE_COMPILERCHECK: content
 
 jobs:
   ios:
     runs-on: macos-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          brew install ninja ccache || true
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      # Compiles carry over from one run to the next.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../ccache
+          key: ios-ccache-${{ github.run_id }}
+          restore-keys: ios-ccache-
 
       - name: ReXGlue source
         run: |
@@ -40,12 +64,6 @@ jobs:
             git -C "$RUNNER_TEMP/rexglue-sdk" apply --whitespace=nowarn "$PWD/$p"
           done
 
-      - name: Toolchain
-        run: |
-          brew install ninja ccache || true
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
-
       - name: Configure SDK (iOS)
         working-directory: ${{ runner.temp }}/rexglue-sdk
         run: |
@@ -53,6 +71,7 @@ jobs:
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE=$CONFIG \
             -DCMAKE_INSTALL_PREFIX="$PWD/out/install/ios" \
             -DREXGLUE_ENABLE_TRACY=OFF 2>&1 | tee "$RUNNER_TEMP/configure.log"
@@ -66,16 +85,89 @@ jobs:
           cmake --build out/build/ios --target install -- -k 0 > "$RUNNER_TEMP/build.log" 2>&1
           code=$?
           echo "===== errors ====="
-          grep -E "error:|error LNK|Undefined symbols|ld: " "$RUNNER_TEMP/build.log" | sort -u | head -300
+          grep -E "error:|Undefined symbols|ld: |CMake Error" "$RUNNER_TEMP/build.log" | sort -u | head -300
           echo "===== tail ====="
           tail -30 "$RUNNER_TEMP/build.log"
+          ccache -s || true
           exit $code
+
+      # Codegen runs on this Mac, so it uses the released macOS CLI.
+      - name: Codegen CLI
+        if: inputs.stage == 'game'
+        run: |
+          v=${REXGLUE_TAG#v}
+          curl -sSfL -o "$RUNNER_TEMP/rexglue-mac.zip" \
+            "https://github.com/rexglue/rexglue-sdk/releases/download/$REXGLUE_TAG/rexglue-sdk-$v-mac-arm64.zip"
+          mkdir -p "$RUNNER_TEMP/rexglue-mac"
+          unzip -q "$RUNNER_TEMP/rexglue-mac.zip" -d "$RUNNER_TEMP/rexglue-mac"
+          cli=$(find "$RUNNER_TEMP/rexglue-mac" -type f -name rexglue -perm -u+x | head -1)
+          test -n "$cli"
+          xattr -dr com.apple.quarantine "$RUNNER_TEMP/rexglue-mac" 2>/dev/null || true
+          "$cli" --help | head -5 || true
+          echo "REXGLUE_CLI=$cli" >> "$GITHUB_ENV"
+
+      - name: Generate rexglue.cmake
+        if: inputs.stage == 'game'
+        run: |
+          tmp=$RUNNER_TEMP/initproj
+          mkdir -p "$tmp" generated
+          "$REXGLUE_CLI" init --project-name nbajam_ofe --xex-path "$PWD/game/default.xex" --project-root "$tmp"
+          cp "$(find "$tmp" -name rexglue.cmake | head -1)" generated/rexglue.cmake
+
+      - name: Configure game (iOS)
+        if: inputs.stage == 'game'
+        run: |
+          cmake -S . -B out/build/game-ios -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_BUILD_TYPE=$CONFIG -DNBAJAM_IOS=ON \
+            -DNBAJAM_CODEGEN_CLI="$REXGLUE_CLI" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_FIND_ROOT_PATH="$RUNNER_TEMP/rexglue-sdk/out/install/ios" \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/rexglue-sdk/out/install/ios"
+
+      - name: Codegen
+        if: inputs.stage == 'game'
+        run: |
+          cmake --build out/build/game-ios --target nbajam_ofe_codegen
+          cmake -S . -B out/build/game-ios
+
+      - name: Build game (iOS)
+        if: inputs.stage == 'game'
+        run: |
+          set +e
+          cmake --build out/build/game-ios -- -k 0 > "$RUNNER_TEMP/game-build.log" 2>&1
+          code=$?
+          echo "===== errors ====="
+          grep -E "error:|Undefined symbols|ld: |CMake Error|\"_.*\", referenced from" "$RUNNER_TEMP/game-build.log" | sort -u | head -300
+          echo "===== tail ====="
+          tail -40 "$RUNNER_TEMP/game-build.log"
+          ccache -s || true
+          exit $code
+
+      - name: Package
+        if: inputs.stage == 'game'
+        run: |
+          mkdir -p "$RUNNER_TEMP/ipa"
+          for variant in base 2020s Legends; do
+            ./ios/game/package.sh out/build/game-ios "$RUNNER_TEMP/rexglue-sdk/out/install/ios" \
+              "$RUNNER_TEMP/ipa" "${{ inputs.version }}" "$variant"
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: inputs.stage == 'game'
+        with:
+          name: nbajam-ios-ipa
+          path: ${{ runner.temp }}/ipa/*.ipa
+          retention-days: 14
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ios-rexglue-logs
+          name: ios-logs
           path: |
             ${{ runner.temp }}/configure.log
             ${{ runner.temp }}/build.log
+            ${{ runner.temp }}/game-build.log
           retention-days: 7

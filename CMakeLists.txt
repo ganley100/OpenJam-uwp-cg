@@ -72,6 +72,23 @@ if(NBAJAM_UWP)
     list(APPEND NBAJAMOFE_SOURCES src/uwp_platform.cpp)
 endif()
 
+# iPhone, against a ReXGlue built for iOS with the patches in
+# ios/rexglue. As on the Xbox, an app cannot start another process, so
+# src/ios_platform.mm stands in for the mod swap and the watchdog, and each
+# mod is an app of its own. The controller is drawn on the screen
+# (src/ios_touch.cpp). nbajam_hooks.cpp is diagnostics no hook names any
+# more, written with Windows' structured exceptions.
+option(NBAJAM_IOS "Build for iOS (iPhone)" OFF)
+
+if(NBAJAM_IOS)
+    if(NOT IOS)
+        message(FATAL_ERROR "NBAJAM_IOS needs CMAKE_SYSTEM_NAME=iOS")
+    endif()
+    enable_language(OBJCXX)
+    list(REMOVE_ITEM NBAJAMOFE_SOURCES src/mod_swap.cpp src/watchdog.cpp src/nbajam_hooks.cpp)
+    list(APPEND NBAJAMOFE_SOURCES src/ios_platform.mm src/ios_touch.cpp)
+endif()
+
 if(REXPORT_CRASH_REPORT AND WIN32)
     list(APPEND NBAJAMOFE_SOURCES src/crash_report.cpp)
 endif()
@@ -104,6 +121,15 @@ if(NBAJAM_UWP)
     target_link_options(nbajam_ofe PRIVATE "LINKER:/MAP")
     # xinputuap.lib is XInput 1.4 as an app links it.
     target_link_libraries(nbajam_ofe PRIVATE xinputuap.lib)
+endif()
+
+if(NBAJAM_IOS)
+    target_compile_definitions(nbajam_ofe PRIVATE NBAJAM_IOS=1)
+    # SDL for the fingers and the message box: its headers only. The runtime
+    # library has SDL in it already, and a second copy here would be a second
+    # SDL that never sees the window's events.
+    target_link_libraries(nbajam_ofe PRIVATE SDL3::Headers)
+    target_link_libraries(nbajam_ofe PRIVATE "-framework Foundation")
 endif()
 
 # ReXGlue v0.10.0 translates vpkuwus/vpkuhus by writing the destination

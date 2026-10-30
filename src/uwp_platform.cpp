@@ -75,66 +75,6 @@ std::string Variant() {
   return {};
 }
 
-// The first .ojpk in LocalState: a whole game root in one file, from
-// tools/xbox_pack.py.
-std::filesystem::path FindPack(const std::filesystem::path& folder) {
-  std::error_code ec;
-  for (const auto& e : std::filesystem::directory_iterator(folder, ec)) {
-    if (e.path().extension() == ".ojpk") return e.path();
-  }
-  return {};
-}
-
-// Unpacks an .ojpk into `into`. Returns the file count, or -1. See
-// tools/xbox_pack.py for the format.
-int UnpackPack(const std::filesystem::path& pack, const std::filesystem::path& into,
-               std::ofstream& status) {
-  namespace fs = std::filesystem;
-  std::ifstream in(pack, std::ios::binary);
-  char magic[8]{};
-  uint32_t count = 0;
-  if (!in.read(magic, 8) || std::memcmp(magic, "OJPK1\0\0\0", 8) != 0 ||
-      !in.read(reinterpret_cast<char*>(&count), 4)) {
-    status << "that is not a pack from tools/xbox_pack.py\n";
-    return -1;
-  }
-  std::vector<char> buf(1 << 20);
-  for (uint32_t i = 0; i < count; ++i) {
-    uint16_t len = 0;
-    uint64_t size = 0;
-    std::string rel;
-    if (!in.read(reinterpret_cast<char*>(&len), 2)) return -1;
-    rel.resize(len);
-    if (!in.read(rel.data(), len) || !in.read(reinterpret_cast<char*>(&size), 8)) return -1;
-    // Nothing outside the target, whatever the pack says.
-    if (rel.empty() || rel[0] == '/' || rel.find("..") != std::string::npos ||
-        rel.find(':') != std::string::npos) {
-      status << "refusing a path in the pack: " << rel << "\n";
-      return -1;
-    }
-    const fs::path target =
-        into / fs::path(std::u8string(reinterpret_cast<const char8_t*>(rel.data()), rel.size()));
-    std::error_code ec;
-    fs::create_directories(target.parent_path(), ec);
-    std::ofstream out(target, std::ios::binary | std::ios::trunc);
-    if (!out) {
-      status << "could not write " << target.string() << "\n";
-      return -1;
-    }
-    while (size > 0) {
-      const size_t step = size_t(std::min<uint64_t>(size, buf.size()));
-      if (!in.read(buf.data(), std::streamsize(step))) return -1;
-      out.write(buf.data(), std::streamsize(step));
-      size -= step;
-    }
-    if (i % 500 == 0) {
-      status << "  " << i << " / " << count << "\n";
-      status.flush();
-    }
-  }
-  return int(count);
-}
-
 }  // namespace
 
 std::string NbaUwpVariant() {
@@ -161,11 +101,11 @@ std::filesystem::path NbaUwpGameRoot() {
     }
     // A pack from tools/xbox_pack.py: what the mod apps need, and the base
     // game can take one too.
-    const fs::path pack = FindPack(local);
+    const fs::path pack = NbaFindPack(local);
     if (!pack.empty()) {
       status << "unpacking " << pack.filename().string() << " into " << game.string() << "\n";
       status.flush();
-      const int n = UnpackPack(pack, game, status);
+      const int n = NbaUnpackPack(pack, game, status);
       if (n <= 0 || !fs::exists(game / "default.xex", ec)) {
         status << "unpacking failed (" << n << " file(s))\n";
         return {};

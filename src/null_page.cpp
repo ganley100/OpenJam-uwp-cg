@@ -29,7 +29,7 @@
 
 #include "null_page.h"
 
-#include <windows.h>
+#include "win_compat.h"
 
 #include <cstdint>
 

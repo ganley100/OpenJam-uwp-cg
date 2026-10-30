@@ -12,6 +12,16 @@
 
 #include "host_pad.h"
 
+#if NBAJAM_IOS
+// On the iPhone the controller the chooser reads is the one on the screen.
+#include "ios_touch.h"
+
+bool NbaHostPad(uint16_t* buttons, uint8_t* left_trigger) {
+  return NbaTouchPad(buttons, left_trigger);
+}
+
+#else
+
 #include <windows.h>
 #include <xinput.h>
 
@@ -52,3 +62,5 @@ bool NbaHostPad(uint16_t* buttons, uint8_t* left_trigger) {
   }
   return false;
 }
+
+#endif  // NBAJAM_IOS

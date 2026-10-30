@@ -89,7 +89,7 @@
 #include "host_pad.h"
 #include "mod_swap.h"
 
-#include <windows.h>
+#include "win_compat.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>   // custom atlas rectangles, for the buttons

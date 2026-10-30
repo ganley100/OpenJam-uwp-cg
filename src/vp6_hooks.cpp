@@ -41,7 +41,7 @@
 
 #include "vp6_hooks.h"
 
-#include <windows.h>
+#include "win_compat.h"
 
 #include <algorithm>
 #include <cstdint>

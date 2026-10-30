@@ -43,7 +43,7 @@
 #include "mod_picker.h"
 #include "window_title.h"
 
-#include <windows.h>
+#include "win_compat.h"
 
 #include <cstdint>
 #include <cstdlib>

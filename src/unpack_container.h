@@ -5,6 +5,7 @@
 #pragma once
 
 #include <filesystem>
+#include <iosfwd>
 #include <functional>
 #include <string>
 
@@ -32,3 +33,11 @@ int NbaUnpackLiveContainer(
 // container and leave without starting the game. Does nothing and returns if
 // the command line does not ask for it. Called before anything is set up.
 void NbaUnpackIfAsked();
+
+// The first .ojpk in `folder`, or nothing. See tools/xbox_pack.py.
+std::filesystem::path NbaFindPack(const std::filesystem::path& folder);
+
+// Unpacks an .ojpk into `into`, saying how it goes on `status`. Returns the
+// file count, or -1.
+int NbaUnpackPack(const std::filesystem::path& pack, const std::filesystem::path& into,
+                  std::ostream& status);

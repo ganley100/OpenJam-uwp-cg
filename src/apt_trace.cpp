@@ -49,8 +49,8 @@
 
 #include "apt_trace.h"
 
-#include <windows.h>
-#if !NBAJAM_UWP
+#include "win_compat.h"
+#if defined(_WIN32) && !NBAJAM_UWP
 #include <dbghelp.h>   // desktop only; the Xbox build logs no stack
 #endif
 
@@ -125,7 +125,7 @@ bool Stacks() {
 }
 
 void DumpStack() {
-#if !NBAJAM_UWP
+#if defined(_WIN32) && !NBAJAM_UWP
   // Twice a second is plenty: the question is which functions a screen runs,
   // not how often, and a stack line is long.
   static uint64_t last = 0;

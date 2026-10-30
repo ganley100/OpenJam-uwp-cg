@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <windows.h>
+#include "win_compat.h"
 
 #include <filesystem>
 #include <system_error>
@@ -18,6 +18,10 @@
 #include "window_title.h"
 #if NBAJAM_UWP
 #include "uwp_platform.h"
+#endif
+#if NBAJAM_IOS
+#include "ios_platform.h"
+#include "ios_touch.h"
 #endif
 
 #include <rex/cvar.h>
@@ -54,6 +58,14 @@ class NbajamOfeApp : public rex::ReXApp {
       NbaUwpNoGame();
     }
 #endif
+#if NBAJAM_IOS
+    // The same on the phone. The fingers are followed from here on, before
+    // the window opens.
+    if (NbaIosGameRoot().empty()) {
+      NbaIosNoGame();
+    }
+    NbaTouchInstall();
+#endif
     return std::unique_ptr<NbajamOfeApp>(new NbajamOfeApp(ctx, "nbajam_ofe",
         PPCImageConfig));
   }
@@ -88,6 +100,12 @@ class NbajamOfeApp : public rex::ReXApp {
     // are mandatory for this title are supplied when nothing else did. Only
     // when still unset: the config file and the command line are both applied
     // before this runs, so anything asked for stays asked for.
+#if NBAJAM_IOS
+    // The controller on the screen comes first; see src/ios_touch.cpp.
+    config.input_factory = [](bool tool_mode) -> std::unique_ptr<rex::system::IInputSystem> {
+      return NbaTouchInputSystem(tool_mode);
+    };
+#endif
     if (config.gpu_plugin.empty()) {
       config.gpu_plugin = "xenos";      // otherwise the window is black
     }
@@ -102,7 +120,7 @@ class NbajamOfeApp : public rex::ReXApp {
     //
     // On the Xbox there is no desktop to be a window on, so the reverse.
     if (!rex::cvar::HasNonDefaultValue("fullscreen")) {
-#if NBAJAM_UWP
+#if NBAJAM_UWP || NBAJAM_IOS
       REXCVAR_SET(fullscreen, true);
 #else
       REXCVAR_SET(fullscreen, false);
@@ -129,6 +147,11 @@ class NbajamOfeApp : public rex::ReXApp {
     // The package is only the program; the game is in the app's storage.
     if (paths.game_data_root.empty()) {
       paths.game_data_root = NbaUwpGameRoot();
+    }
+#endif
+#if NBAJAM_IOS
+    if (paths.game_data_root.empty()) {
+      paths.game_data_root = NbaIosGameRoot();
     }
 #endif
     if (paths.game_data_root.empty() && !home.empty()) {
@@ -163,6 +186,11 @@ class NbajamOfeApp : public rex::ReXApp {
     // folder per mod without saves.path having to say so.
     if (const std::filesystem::path local = NbaUwpLocalState(); !local.empty()) {
       paths.user_data_root = local / "saves";
+    }
+#endif
+#if NBAJAM_IOS
+    if (const std::filesystem::path docs = NbaIosDocuments(); !docs.empty()) {
+      paths.user_data_root = docs / "saves";
     }
 #endif
     // And this is the only place that knows which root won, which is what a
@@ -211,6 +239,9 @@ class NbajamOfeApp : public rex::ReXApp {
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
     NbaTrackFrameRateInTitle(drawer, window());
     NbaModPickerCreate(drawer);
+#if NBAJAM_IOS
+    NbaTouchCreate(drawer);
+#endif
     NbaWatchdogCreate(drawer);
     rex::ReXApp::OnCreateDialogs(drawer);
   }

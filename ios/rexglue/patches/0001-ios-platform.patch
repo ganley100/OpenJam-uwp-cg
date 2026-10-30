@@ -34,7 +34,7 @@ index ef10d9c..3fcc909 100644
          if(NOT TARGET rex::moltenvk)
              add_library(rex::moltenvk SHARED IMPORTED)
 diff --git a/cmake/rexglue_helpers.cmake b/cmake/rexglue_helpers.cmake
-index bf28a3f..74c4ad7 100644
+index bf28a3f..ae05143 100644
 --- a/cmake/rexglue_helpers.cmake
 +++ b/cmake/rexglue_helpers.cmake
 @@ -9,6 +9,11 @@
@@ -49,6 +49,19 @@ index bf28a3f..74c4ad7 100644
      if(TARGET Vulkan::Loader AND TARGET MoltenVK::MoltenVK)
          set(_rexglue_vulkan_loader Vulkan::Loader)
          set(_rexglue_moltenvk MoltenVK::MoltenVK)
+@@ -99,6 +104,12 @@ function(rexglue_configure_target target_name)
+             INSTALL_RPATH "$ORIGIN"
+             BUILD_WITH_INSTALL_RPATH ON
+         )
++    elseif(IOS)
++        # OpenJam: an iOS app keeps its libraries in Frameworks.
++        set_target_properties(${target_name} PROPERTIES
++            INSTALL_RPATH "@executable_path/Frameworks"
++            BUILD_WITH_INSTALL_RPATH ON
++        )
+     elseif(APPLE)
+         # macOS analogue of $ORIGIN: resolve @rpath dylibs (librexruntime,
+         # libTracyClient, ...) next to the executable. Pairs with the runtime
 diff --git a/cmake/rexglue_install.cmake b/cmake/rexglue_install.cmake
 index 4b52d57..a7d5f49 100644
 --- a/cmake/rexglue_install.cmake
@@ -141,6 +154,45 @@ index 754fa13..45c3591 100644
    if (!std::filesystem::exists(path)) {
      REXSYS_ERROR(
          "GPU plugin '{}' not found at {}. Stage it next to the executable "
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index 428f31d..2b5953a 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -20,6 +20,7 @@
+ #include <rex/filesystem.h>
+ #include <rex/logging/sink.h>
+ #include <rex/logging.h>
++#include <rex/platform.h>
+ #include <rex/ui/overlay/achievement_toast.h>
+ #include <rex/ui/overlay/achievements_overlay.h>
+ #include <rex/ui/overlay/console_overlay.h>
+@@ -108,7 +109,7 @@ bool ReXApp::OnInitialize() {
+ 
+ bool ReXApp::SetupEnvironment() {
+   auto exe_dir = rex::filesystem::GetExecutableFolder();
+-#if REXGLUE_UWP
++#if REXGLUE_UWP || REX_PLATFORM_IOS
+   // OpenJam: an app's install folder is read-only and Documents is closed to
+   // it. Its working folder is LocalState (windowed_app_main_uwp.cpp), so
+   // what would be written beside the executable or in Documents goes there.
+@@ -127,7 +128,7 @@ bool ReXApp::SetupEnvironment() {
+   if (!user_data_cvar.empty()) {
+     user_dir = user_data_cvar;
+   } else {
+-#if REXGLUE_UWP
++#if REXGLUE_UWP || REX_PLATFORM_IOS
+     user_dir = writable_dir / GetName();
+ #else
+     user_dir = rex::filesystem::GetUserFolder() / GetName();
+@@ -182,7 +183,7 @@ bool ReXApp::SetupEnvironment() {
+                                         log_level_str, category_levels);
+   if (log_file_cvar.empty()) {
+     log_config.app_name = std::string(GetName());
+-#if REXGLUE_UWP
++#if REXGLUE_UWP || REX_PLATFORM_IOS
+     log_config.log_dir = (writable_dir / "logs").string();
+ #else
+     log_config.log_dir = (exe_dir / "logs").string();
 diff --git a/src/ui/vulkan/vulkan_instance.cpp b/src/ui/vulkan/vulkan_instance.cpp
 index 914b311..369fc09 100644
 --- a/src/ui/vulkan/vulkan_instance.cpp
@@ -158,6 +210,39 @@ index 914b311..369fc09 100644
    loader_candidates.emplace_back(platform::lib_names::kVulkanLoader);
    loader_candidates.emplace_back("libvulkan.dylib");
    loader_candidates.emplace_back("libMoltenVK.dylib");
+diff --git a/src/ui/windowed_app_main_sdl.cpp b/src/ui/windowed_app_main_sdl.cpp
+index 77bb1dc..8acd1ef 100644
+--- a/src/ui/windowed_app_main_sdl.cpp
++++ b/src/ui/windowed_app_main_sdl.cpp
+@@ -34,6 +34,13 @@
+ #include <shellapi.h>
+ #endif
+ 
++#if REX_PLATFORM_IOS
++// OpenJam: on iOS, SDL owns the real main() and starts this one once
++// UIKit is up.
++#include <filesystem>
++#include <SDL3/SDL_main.h>
++#endif
++
+ namespace {
+ 
+ int RunWindowedApp(int argc, char** argv) {
+@@ -127,6 +134,14 @@ int WINAPI wWinMain(HINSTANCE hinstance, HINSTANCE hinstance_prev, LPWSTR comman
+ #else
+ 
+ int main(int argc, char* argv[]) {
++#if REX_PLATFORM_IOS
++  // OpenJam: an app starts in a read-only folder; Documents is its own, and
++  // what the runtime writes relative to the current folder lands there.
++  if (const char* home = std::getenv("HOME")) {
++    std::error_code ec;
++    std::filesystem::current_path(std::filesystem::path(home) / "Documents", ec);
++  }
++#endif
+   return RunWindowedApp(argc, argv);
+ }
+ 
 diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
 index c3262d9..36f223d 100644
 --- a/thirdparty/CMakeLists.txt
