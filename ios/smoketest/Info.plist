@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>OpenJamTest</string>
+  <key>CFBundleIdentifier</key><string>org.openjam.smoketest</string>
+  <key>CFBundleName</key><string>OpenJam Test</string>
+  <key>CFBundleDisplayName</key><string>OpenJam Test</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>
+  <key>MinimumOSVersion</key><string>15.0</string>
+  <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+  <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string><string>metal</string></array>
+  <key>UILaunchScreen</key><dict/>
+  <key>UIStatusBarHidden</key><true/>
+  <!-- report.txt shows in the Files app under On My iPhone. -->
+  <key>UIFileSharingEnabled</key><true/>
+  <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+  <key>GCSupportsControllerUserInteraction</key><true/>
+</dict>
+</plist>

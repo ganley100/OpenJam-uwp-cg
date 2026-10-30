@@ -1,0 +1,28 @@
+# Builds the iPhone smoke test (ios/smoketest) as an unsigned .ipa, for
+# Sideloadly to sign with the player's Apple ID and install. Mac minutes count
+# ten times against a private repository's allowance, so this only runs when
+# the test itself changes.
+
+name: iOS smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "ios/smoketest/**"
+      - ".github/workflows/ios-smoketest.yml"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: ./ios/smoketest/build.sh "$RUNNER_TEMP/ios"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openjam-ios-smoketest
+          path: ${{ runner.temp }}/ios/OpenJamTest.ipa
+          retention-days: 30
