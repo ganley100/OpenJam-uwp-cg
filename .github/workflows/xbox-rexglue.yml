@@ -344,7 +344,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "build failed" }
 
       - name: Package
-        run: ./xbox/game/package.ps1 -BuildDir out/build/game-uwp -Out out/appx -Version "1.0.${{ github.run_number }}.0" -Diagnostics out/build/diagnostics/smoketest.exe
+        run: |
+          foreach ($variant in "base", "2020s", "Legends") {
+            ./xbox/game/package.ps1 -BuildDir out/build/game-uwp -Out out/appx -Variant $variant `
+              -Version "1.0.${{ github.run_number }}.0" -Diagnostics out/build/diagnostics/smoketest.exe
+          }
 
       - name: Linker maps
         if: always()

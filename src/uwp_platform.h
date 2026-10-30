@@ -5,6 +5,7 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
 
 // The app's own writable folder, LocalState. The package itself is installed
 // read-only, so saves cannot go beside the game the way they do on a PC.
@@ -18,6 +19,11 @@ std::filesystem::path NbaUwpLocalState();
 // there is neither. What happened is written to LocalState\status.txt, since
 // this runs before there is a log.
 std::filesystem::path NbaUwpGameRoot();
+
+// Which app this is: "" for the base game, else the mod it plays ("2020s",
+// "Legends"), from the package name OpenJam.NBAJamOFE[.<mod>]. A mod app
+// takes only a pack from tools/xbox_pack.py, never the Xbox Live container.
+std::string NbaUwpVariant();
 
 // With no game found, say what to do on screen and end the app, rather than
 // leaving the player at a splash screen that closes. Does not return.

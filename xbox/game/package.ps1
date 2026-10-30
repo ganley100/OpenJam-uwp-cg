@@ -13,6 +13,10 @@ param(
     [Parameter(Mandatory = $true)] [string]$BuildDir,
     [Parameter(Mandatory = $true)] [string]$Out,
     [string]$Version = "1.0.0.0",
+    # Which app: the base game, or the mod it plays. Each installs as its
+    # own app, with its own storage and saves.
+    [ValidateSet("base", "2020s", "Legends")]
+    [string]$Variant = "base",
     # The smoke test, the manifest's second tile.
     [Parameter(Mandatory = $true)] [string]$Diagnostics
 )
@@ -38,10 +42,20 @@ Copy-Item (Join-Path $here "nbajam_ofe.toml") $layout
 $meta = Join-Path $repo "metadata"
 if (Test-Path $meta) { Copy-Item -Recurse $meta (Join-Path $layout "metadata") }
 Copy-Item -Recurse (Join-Path $repo "packaging\xbox\Assets") (Join-Path $layout "Assets")
-(Get-Content (Join-Path $here "AppxManifest.xml") -Raw) -replace "@VERSION@", $Version |
+# The identity is how the app knows which it is (src/uwp_platform.cpp).
+$v = @{
+    "base"    = @{ Identity = "OpenJam.NBAJamOFE";         Name = "NBA JAM: On Fire Edition";        Short = "NBA JAM";         File = "NBAJamOFE" }
+    "2020s"   = @{ Identity = "OpenJam.NBAJamOFE.2020s";   Name = "NBA JAM 2020s On Fire Edition";   Short = "NBA JAM 2020s";   File = "NBAJamOFE-2020s" }
+    "Legends" = @{ Identity = "OpenJam.NBAJamOFE.Legends"; Name = "NBA JAM Legends On Fire Edition"; Short = "NBA JAM Legends"; File = "NBAJamOFE-Legends" }
+}[$Variant]
+(Get-Content (Join-Path $here "AppxManifest.xml") -Raw) `
+    -replace "@VERSION@", $Version `
+    -replace "@IDENTITY@", $v.Identity `
+    -replace "@DISPLAY_NAME@", $v.Name `
+    -replace "@SHORT_NAME@", $v.Short |
     Set-Content (Join-Path $layout "AppxManifest.xml") -Encoding UTF8
 
-$appx = Join-Path $Out ("NBAJamOFE_{0}_x64.appx" -f $Version)
+$appx = Join-Path $Out ("{0}_{1}_x64.appx" -f $v.File, $Version)
 & makeappx pack /o /d $layout /p $appx
 if ($LASTEXITCODE -ne 0) { throw "makeappx failed ($LASTEXITCODE)" }
 
@@ -51,7 +65,7 @@ $cert = New-SelfSignedCertificate -Type Custom -Subject "CN=OpenJam" `
     -KeyUsage DigitalSignature -FriendlyName "OpenJam Xbox packages" `
     -CertStoreLocation "Cert:\CurrentUser\My" `
     -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
-$pfx = Join-Path $env:RUNNER_TEMP "openjam-game.pfx"
+$pfx = Join-Path $env:RUNNER_TEMP "openjam-game-$Variant.pfx"
 $pw = ConvertTo-SecureString -String "openjam" -Force -AsPlainText
 Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pw | Out-Null
 & signtool sign /fd SHA256 /f $pfx /p openjam $appx

@@ -29,13 +29,18 @@
 #include <fstream>
 #include <string>
 
+#include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Storage.h>
 #include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.UI.Popups.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <vector>
 
 #include <rex/logging.h>
 
@@ -48,6 +53,93 @@ std::filesystem::path NbaUwpLocalState() {
   } catch (const winrt::hresult_error&) {
     return {};
   }
+}
+
+namespace {
+
+// Which of the three apps this is, from its package name: "" for the base
+// game, or the mod's name ("2020s", "Legends"), the part after the last dot
+// of OpenJam.NBAJamOFE.<mod>.
+std::string Variant() {
+  try {
+    const std::wstring name(
+        winrt::Windows::ApplicationModel::Package::Current().Id().Name());
+    const std::wstring base = L"OpenJam.NBAJamOFE";
+    if (name.size() > base.size() + 1 && name.compare(0, base.size(), base) == 0) {
+      std::string out;
+      for (wchar_t ch : name.substr(base.size() + 1)) out += char(ch);
+      return out;
+    }
+  } catch (...) {
+  }
+  return {};
+}
+
+// The first .ojpk in LocalState: a whole game root in one file, from
+// tools/xbox_pack.py.
+std::filesystem::path FindPack(const std::filesystem::path& folder) {
+  std::error_code ec;
+  for (const auto& e : std::filesystem::directory_iterator(folder, ec)) {
+    if (e.path().extension() == ".ojpk") return e.path();
+  }
+  return {};
+}
+
+// Unpacks an .ojpk into `into`. Returns the file count, or -1. See
+// tools/xbox_pack.py for the format.
+int UnpackPack(const std::filesystem::path& pack, const std::filesystem::path& into,
+               std::ofstream& status) {
+  namespace fs = std::filesystem;
+  std::ifstream in(pack, std::ios::binary);
+  char magic[8]{};
+  uint32_t count = 0;
+  if (!in.read(magic, 8) || std::memcmp(magic, "OJPK1\0\0\0", 8) != 0 ||
+      !in.read(reinterpret_cast<char*>(&count), 4)) {
+    status << "that is not a pack from tools/xbox_pack.py\n";
+    return -1;
+  }
+  std::vector<char> buf(1 << 20);
+  for (uint32_t i = 0; i < count; ++i) {
+    uint16_t len = 0;
+    uint64_t size = 0;
+    std::string rel;
+    if (!in.read(reinterpret_cast<char*>(&len), 2)) return -1;
+    rel.resize(len);
+    if (!in.read(rel.data(), len) || !in.read(reinterpret_cast<char*>(&size), 8)) return -1;
+    // Nothing outside the target, whatever the pack says.
+    if (rel.empty() || rel[0] == '/' || rel.find("..") != std::string::npos ||
+        rel.find(':') != std::string::npos) {
+      status << "refusing a path in the pack: " << rel << "\n";
+      return -1;
+    }
+    const fs::path target =
+        into / fs::path(std::u8string(reinterpret_cast<const char8_t*>(rel.data()), rel.size()));
+    std::error_code ec;
+    fs::create_directories(target.parent_path(), ec);
+    std::ofstream out(target, std::ios::binary | std::ios::trunc);
+    if (!out) {
+      status << "could not write " << target.string() << "\n";
+      return -1;
+    }
+    while (size > 0) {
+      const size_t step = size_t(std::min<uint64_t>(size, buf.size()));
+      if (!in.read(buf.data(), std::streamsize(step))) return -1;
+      out.write(buf.data(), std::streamsize(step));
+      size -= step;
+    }
+    if (i % 500 == 0) {
+      status << "  " << i << " / " << count << "\n";
+      status.flush();
+    }
+  }
+  return int(count);
+}
+
+}  // namespace
+
+std::string NbaUwpVariant() {
+  static const std::string variant = Variant();
+  return variant;
 }
 
 std::filesystem::path NbaUwpGameRoot() {
@@ -66,6 +158,27 @@ std::filesystem::path NbaUwpGameRoot() {
     if (fs::exists(game / "default.xex", ec)) {
       status << "game: " << game.string() << "\n";
       return game;
+    }
+    // A pack from tools/xbox_pack.py: what the mod apps need, and the base
+    // game can take one too.
+    const fs::path pack = FindPack(local);
+    if (!pack.empty()) {
+      status << "unpacking " << pack.filename().string() << " into " << game.string() << "\n";
+      status.flush();
+      const int n = UnpackPack(pack, game, status);
+      if (n <= 0 || !fs::exists(game / "default.xex", ec)) {
+        status << "unpacking failed (" << n << " file(s))\n";
+        return {};
+      }
+      status << n << " file(s) unpacked. The .ojpk can be deleted now.\n";
+      return game;
+    }
+    // A mod app plays the mod, and an Xbox Live container is the plain game:
+    // only a pack will do.
+    if (!NbaUwpVariant().empty()) {
+      status << "No game yet. Make a pack of the " << NbaUwpVariant()
+             << " mod with tools/xbox_pack.py and copy it into this folder.\n";
+      return {};
     }
     const fs::path container = NbaFindLiveContainer(local);
     if (container.empty()) {
@@ -92,14 +205,25 @@ std::filesystem::path NbaUwpGameRoot() {
 void NbaUwpNoGame() {
   using namespace winrt::Windows::UI;
   const std::wstring local = NbaUwpLocalState().wstring();
+  const std::string variant = NbaUwpVariant();
+  const std::wstring wvariant(variant.begin(), variant.end());
   const std::wstring text =
-      L"No game found.\n\n"
-      L"Copy your Xbox Live download of NBA JAM: On Fire Edition (the file "
-      L"with a 42-character name and no extension, about 850 MB) into this "
-      L"app's LocalState folder with Device Portal's File Explorer:\n\n" +
-      local +
-      L"\n\nThen start the app again. The first start after that unpacks the "
-      L"game, which takes a minute or two.";
+      variant.empty()
+          ? L"No game found.\n\n"
+            L"Copy your Xbox Live download of NBA JAM: On Fire Edition (the file "
+            L"with a 42-character name and no extension, about 850 MB) into this "
+            L"app's LocalState folder with Device Portal's File Explorer:\n\n" +
+                local +
+                L"\n\nThen start the app again. The first start after that unpacks the "
+                L"game, which takes a minute or two."
+          : L"No game found.\n\n"
+            L"This app plays the " + wvariant + L" mod. Make a pack of it on your "
+            L"PC - python tools/xbox_pack.py <the mod's staged folder> " + wvariant +
+                L".ojpk - and copy the .ojpk into this app's LocalState folder with "
+                L"Device Portal's File Explorer:\n\n" +
+                local +
+                L"\n\nThen start the app again. The first start after that unpacks it, "
+                L"which takes a minute or two.";
   bool done = false;
   try {
     Popups::MessageDialog dialog(winrt::hstring(text), L"NBA JAM: On Fire Edition");
