@@ -23,6 +23,10 @@ on:
         description: "app version"
         required: true
         default: "1.0.1"
+      runner:
+        description: "macOS runner (Apple Silicon ones are often queued for capacity)"
+        required: true
+        default: macos-15-intel
 
 env:
   REXGLUE_TAG: v0.10.0
@@ -33,7 +37,7 @@ env:
 
 jobs:
   ios:
-    runs-on: macos-latest
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
@@ -96,8 +100,9 @@ jobs:
         if: inputs.stage == 'game'
         run: |
           v=${REXGLUE_TAG#v}
+          arch=$([ "$(uname -m)" = arm64 ] && echo arm64 || echo amd64)
           curl -sSfL -o "$RUNNER_TEMP/rexglue-mac.zip" \
-            "https://github.com/rexglue/rexglue-sdk/releases/download/$REXGLUE_TAG/rexglue-sdk-$v-mac-arm64.zip"
+            "https://github.com/rexglue/rexglue-sdk/releases/download/$REXGLUE_TAG/rexglue-sdk-$v-mac-$arch.zip"
           mkdir -p "$RUNNER_TEMP/rexglue-mac"
           unzip -q "$RUNNER_TEMP/rexglue-mac.zip" -d "$RUNNER_TEMP/rexglue-mac"
           cli=$(find "$RUNNER_TEMP/rexglue-mac" -type f -name rexglue -perm -u+x | head -1)
