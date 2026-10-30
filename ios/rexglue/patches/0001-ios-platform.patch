@@ -56,10 +56,25 @@ index bf28a3f..ae05143 100644
          # macOS analogue of $ORIGIN: resolve @rpath dylibs (librexruntime,
          # libTracyClient, ...) next to the executable. Pairs with the runtime
 diff --git a/cmake/rexglue_install.cmake b/cmake/rexglue_install.cmake
-index 4b52d57..a20d0b8 100644
+index 4b52d57..90267b9 100644
 --- a/cmake/rexglue_install.cmake
 +++ b/cmake/rexglue_install.cmake
-@@ -138,7 +138,7 @@ if(REXGLUE_USE_D3D12)
+@@ -49,12 +49,14 @@ install(TARGETS ${REXGLUE_INSTALL_TARGETS}
+     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
++    BUNDLE DESTINATION ${CMAKE_INSTALL_BINDIR}  # OpenJam: iOS makes executables bundles
+ )
+ 
+ # A Debug codegen tool runs an order of magnitude slower, so only Release ships.
+ install(TARGETS rexglue
+     EXPORT rexglueTargets
+     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
++    BUNDLE DESTINATION ${CMAKE_INSTALL_BINDIR}  # OpenJam: iOS makes executables bundles
+     CONFIGURATIONS Release
+ )
+ 
+@@ -138,7 +140,7 @@ if(REXGLUE_USE_D3D12)
      )
  endif()
  

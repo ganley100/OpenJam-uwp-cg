@@ -125,6 +125,8 @@ endif()
 
 if(NBAJAM_IOS)
     target_compile_definitions(nbajam_ofe PRIVATE NBAJAM_IOS=1)
+    # A plain executable: ios/game/package.sh assembles the app around it.
+    set_target_properties(nbajam_ofe PROPERTIES MACOSX_BUNDLE FALSE)
     # SDL for the fingers and the message box: its headers only. The runtime
     # library has SDL in it already, and a second copy here would be a second
     # SDL that never sees the window's events.
