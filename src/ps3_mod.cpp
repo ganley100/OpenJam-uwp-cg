@@ -216,7 +216,9 @@ bool Inflate(const uint8_t* src, size_t n, size_t expected, std::vector<uint8_t>
 std::vector<uint8_t> Deflate(const std::vector<uint8_t>& src) {
   mz_ulong n = mz_compressBound(mz_ulong(src.size()));
   std::vector<uint8_t> out(n);
-  if (mz_compress2(out.data(), &n, src.data(), mz_ulong(src.size()), 9) != MZ_OK) return {};
+  // The fastest level: the console applies a whole mod on its first start,
+  // and the archives only need to be valid zlib, not small.
+  if (mz_compress2(out.data(), &n, src.data(), mz_ulong(src.size()), 1) != MZ_OK) return {};
   out.resize(n);
   return out;
 }
@@ -587,6 +589,9 @@ bool Skip(const std::string& mapped) {
       std::regex("^xenon/saveload/"),
       std::regex("^xenon/genbigs/rend_misc_big\\.ast$"),
       std::regex("^xenon/bigs/audio/aemsdata\\.ast$"),
+      // The in-game scoreboard comes out wrong converted, on the console
+      // (2020s); the disc's own is left in place until the cause is known.
+      std::regex("(^|/)ge_hud_big\\.ast$"),
   };
   for (const auto& p : patterns) {
     if (std::regex_search(mapped, p)) return true;

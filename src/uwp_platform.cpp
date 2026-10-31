@@ -184,7 +184,8 @@ std::wstring FolderName(const std::string& variant) {
 // What a mod app was last given, so it is applied once: the names and sizes
 // of the packages, or the opened mod folder.
 std::string ModSignature(const std::vector<fs::path>& pkgs, bool folder) {
-  std::string sig;
+  // The converter's own revision, so a fixed one applies the mod again.
+  std::string sig = "converter 2\n";
   std::error_code ec;
   for (const auto& p : pkgs) {
     sig += p.filename().string() + " " + std::to_string(fs::file_size(p, ec)) + "\n";
@@ -293,10 +294,24 @@ std::filesystem::path NbaUwpGameRoot() {
     status.flush();
 
     // The game: here already, or unpacked here.
-    fs::path root = GameIn(work);
     std::string what;
     const fs::path game = work / "game";
     const fs::path marker_name = "openjam_mod.txt", base_name = "openjam_unpacked.txt";
+    // A mod applied by an earlier converter, or from other packages, is
+    // taken off by starting again from the plain game - only in the game folder
+    // this app unpacked itself, never in loose files someone put here.
+    if (!variant.empty() && fs::exists(game / base_name, ec)) {
+      const std::string had = ReadText(game / marker_name);
+      const std::vector<fs::path> p = NbaFindPs3Pkgs(work);
+      const bool f = fs::is_directory(work / "mod", ec);
+      if (!had.empty() && (!p.empty() || f) && had != ModSignature(p, f)) {
+        status << "the mod or the converter has changed since it was applied; starting again\n"
+                  "from the plain game\n";
+        status.flush();
+        fs::remove_all(game, ec);
+      }
+    }
+    fs::path root = GameIn(work);
     if (root.empty() && direct && variant.empty()) {
       // The base app's earlier copy in LocalState still plays.
       root = GameIn(local);
