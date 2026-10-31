@@ -69,7 +69,7 @@ if(NBAJAM_UWP)
     set(REXPORT_CRASH_REPORT OFF CACHE BOOL "" FORCE)
     set(REXPORT_GUEST_PROFILER OFF CACHE BOOL "" FORCE)
     list(REMOVE_ITEM NBAJAMOFE_SOURCES src/mod_swap.cpp src/watchdog.cpp)
-    list(APPEND NBAJAMOFE_SOURCES src/uwp_platform.cpp src/ps3_mod.cpp)
+    list(APPEND NBAJAMOFE_SOURCES src/uwp_platform.cpp src/uwp_fromapp.cpp src/ps3_mod.cpp)
 
     # The mod apps open PS3 mods themselves (src/ps3_mod.cpp), whose archives
     # are zlib inside. miniz is zlib in one file.
