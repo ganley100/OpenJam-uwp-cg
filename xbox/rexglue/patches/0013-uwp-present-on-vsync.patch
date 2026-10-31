@@ -1,0 +1,24 @@
+diff --git a/src/ui/d3d12/d3d12_presenter.cpp b/src/ui/d3d12/d3d12_presenter.cpp
+index e3ab8bb..bb9676e 100644
+--- a/src/ui/d3d12/d3d12_presenter.cpp
++++ b/src/ui/d3d12/d3d12_presenter.cpp
+@@ -1172,9 +1172,19 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
+   // fullscreen is ever used in, the allow tearing flag must not be passed in
+   // fullscreen, but DXGI fullscreen is largely unneeded with the flip
+   // presentation model used in Direct3D 12).
++#if REXGLUE_UWP
++  // OpenJam: on the console every frame waits for the display's refresh. The
++  // immediate present below relies on the UI tick, paced by the monitor's
++  // vertical blank, which an app cannot wait on (it has no monitor handle),
++  // so unpaced it had frames replaced before they were shown - 60 drawn,
++  // fewer seen, unevenly, and play that felt like 30. With a sync interval
++  // of 1 each frame is on screen for a refresh of its own.
++  HRESULT present_result = paint_context_.swap_chain->Present(1, 0);
++#else
+   HRESULT present_result = paint_context_.swap_chain->Present(
+       0, DXGI_PRESENT_RESTART |
+              (paint_context_.swap_chain_allows_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0));
++#endif
+   // Even if presentation has failed, work might have been enqueued anyway
+   // internally before the failure according to Jesse Natalie from the DirectX
+   // Discord server.
