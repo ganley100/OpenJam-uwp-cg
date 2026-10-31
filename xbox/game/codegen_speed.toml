@@ -14,4 +14,8 @@ xer_as_local = true
 # the lwarx/stwcx reservation the game's atomic operations retry on.
 reserved_as_local = false
 cr_as_local = true
-non_argument_as_local = true
+# Off: the game still froze at the same point at startup with the
+# reservation back in the context. This one moves r0, r2, r11 and r12 into
+# locals, and the 360 compiler hands values to another function in r11 and
+# r12 (tail-call stubs, the register save helpers), which a local loses.
+non_argument_as_local = false
