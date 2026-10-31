@@ -15,3 +15,10 @@ frame_rate_limit = 0
 # here; if an effect goes missing in a match, one of them is the cause.
 readback_memexport = false
 occlusion_query_enable = false
+
+# The video mode the game is told the console is in. Matches drew 12 to 16
+# frames a second at 1280x720, with the GPU translation busiest there; a
+# widescreen standard-definition mode lets the game draw a smaller frame,
+# which the console then scales up to the TV. 1280 and 720 for full HD.
+video_mode_width = 854
+video_mode_height = 480
