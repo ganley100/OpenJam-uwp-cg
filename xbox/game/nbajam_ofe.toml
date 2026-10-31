@@ -1,9 +1,6 @@
-# NBA JAM settings for the Xbox apps.
-#
-# The first start copies this file into the app's LocalState, and the app
-# reads it from there afterwards: change it in Device Portal (File Explorer,
-# LocalAppData, the app, LocalState, nbajam_ofe.toml), then start the game
-# again. Delete it there to go back to these defaults.
+# NBA JAM settings for the Xbox apps. A file of the same name in an app's
+# LocalState is read instead of this one, for trying a setting without a
+# new build.
 
 # Warnings and errors only: debug logging wrote some 350 lines a second to
 # the console's drive. "debug" to bring something new up on the console.
@@ -13,9 +10,8 @@ log_level = "warning"
 # cap below 60 plays it in slow motion.
 frame_rate_limit = 0
 
-# Graphics settings worth trying when matches draw slowly. Each makes the
-# CPU wait for the GPU partway through a frame; turning one off can be much
-# faster, at the risk of a missing effect. Change true to false, one at a
-# time, and compare fps.txt.
-readback_memexport = true
-occlusion_query_enable = true
+# Matches drew only 12 to 16 frames a second on the console. Each of these
+# makes the CPU wait for the GPU partway through a frame, so both are off
+# here; if an effect goes missing in a match, one of them is the cause.
+readback_memexport = false
+occlusion_query_enable = false

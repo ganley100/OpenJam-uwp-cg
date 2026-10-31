@@ -187,14 +187,11 @@ class NbajamOfeApp : public rex::ReXApp {
     // folder per mod without saves.path having to say so.
     if (const std::filesystem::path local = NbaUwpLocalState(); !local.empty()) {
       paths.user_data_root = local / "saves";
-      // The settings live in LocalState, where Device Portal can change them
-      // between runs: the package's own copy goes there the first time, and
-      // is read from there from then on.
+      // A settings file put in LocalState is read in place of the
+      // package's own, for trying a setting without a new build. Nothing is
+      // copied there: with none, the package's settings stand.
       const std::filesystem::path mine = local / paths.config_path.filename();
       std::error_code cec;
-      if (!std::filesystem::exists(mine, cec) && std::filesystem::exists(paths.config_path, cec)) {
-        std::filesystem::copy_file(paths.config_path, mine, cec);
-      }
       if (std::filesystem::exists(mine, cec)) {
         paths.config_path = mine;
       }
