@@ -1,25 +1,74 @@
 diff --git a/src/ui/d3d12/d3d12_presenter.cpp b/src/ui/d3d12/d3d12_presenter.cpp
-index bb9676e..1413a01 100644
+index bb9676e..2575261 100644
 --- a/src/ui/d3d12/d3d12_presenter.cpp
 +++ b/src/ui/d3d12/d3d12_presenter.cpp
-@@ -33,6 +33,10 @@
+@@ -10,6 +10,8 @@
+  */
+ 
+ #include <algorithm>
++#include <chrono>
++#include <thread>
+ #include <climits>
+ #include <cmath>
+ #include <memory>
+@@ -33,6 +35,14 @@
  #include <ffx_api/ffx_upscale.h>
  #endif
  
-+// OpenJam: on the console, how many display refreshes each frame stays up
-+// for: 1 for up to 60 new frames a second, 2 for an even 30.
-+REXCVAR_DEFINE_INT32(present_interval, 1, "UI/D3D12",
-+                     "Console only: display refreshes per presented frame (1 = 60, 2 = 30)");
++// OpenJam: on the console, how frames go to the display. present_interval 0
++// presents at once, as on Windows; 1 or more waits for that many display
++// refreshes. present_fps_limit, if set, spaces presents at least that far
++// apart in time, whichever the interval.
++REXCVAR_DEFINE_INT32(present_interval, 0, "UI/D3D12",
++                     "Console only: display refreshes per presented frame, 0 = no vsync");
++REXCVAR_DEFINE_INT32(present_fps_limit, 0, "UI/D3D12",
++                     "Console only: most frames presented a second, 0 = no limit");
  REXCVAR_DEFINE_BOOL(d3d12_allow_variable_refresh_rate_and_tearing, true, "UI/D3D12",
                      "Allow variable refresh rate and tearing");
  
-@@ -1179,7 +1183,8 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
-   // so unpaced it had frames replaced before they were shown - 60 drawn,
-   // fewer seen, unevenly, and play that felt like 30. With a sync interval
-   // of 1 each frame is on screen for a refresh of its own.
+@@ -1173,13 +1183,38 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
+   // fullscreen, but DXGI fullscreen is largely unneeded with the flip
+   // presentation model used in Direct3D 12).
+ #if REXGLUE_UWP
+-  // OpenJam: on the console every frame waits for the display's refresh. The
+-  // immediate present below relies on the UI tick, paced by the monitor's
+-  // vertical blank, which an app cannot wait on (it has no monitor handle),
+-  // so unpaced it had frames replaced before they were shown - 60 drawn,
+-  // fewer seen, unevenly, and play that felt like 30. With a sync interval
+-  // of 1 each frame is on screen for a refresh of its own.
 -  HRESULT present_result = paint_context_.swap_chain->Present(1, 0);
-+  HRESULT present_result = paint_context_.swap_chain->Present(
-+      UINT(std::clamp(REXCVAR_GET(present_interval), 1, 4)), 0);
++  // OpenJam: the console has no monitor whose vertical blank the UI tick
++  // could pace this by; see the settings above for what it does instead.
++  if (const int32_t fps = REXCVAR_GET(present_fps_limit); fps > 0) {
++    using clock = std::chrono::steady_clock;
++    static clock::time_point next{};
++    const auto period = std::chrono::nanoseconds(1000000000LL / fps);
++    const auto now = clock::now();
++    if (next != clock::time_point{} && now < next) {
++      // A high-resolution timer: the ordinary sleep is good to ~15 ms.
++      static HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, 0x00000002, TIMER_ALL_ACCESS);
++      const auto left = next - now;
++      if (timer && left > std::chrono::microseconds(500)) {
++        LARGE_INTEGER due;
++        due.QuadPart = -std::chrono::duration_cast<std::chrono::nanoseconds>(left).count() / 100;
++        if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
++          WaitForSingleObject(timer, INFINITE);
++        }
++      }
++      while (clock::now() < next) std::this_thread::yield();
++      next += period;
++    } else {
++      next = now + period;
++    }
++  }
++  const int32_t interval = std::clamp(REXCVAR_GET(present_interval), 0, 4);
++  HRESULT present_result =
++      interval > 0
++          ? paint_context_.swap_chain->Present(UINT(interval), 0)
++          : paint_context_.swap_chain->Present(
++                0, DXGI_PRESENT_RESTART | (paint_context_.swap_chain_allows_tearing
++                                               ? DXGI_PRESENT_ALLOW_TEARING
++                                               : 0));
  #else
    HRESULT present_result = paint_context_.swap_chain->Present(
        0, DXGI_PRESENT_RESTART |
