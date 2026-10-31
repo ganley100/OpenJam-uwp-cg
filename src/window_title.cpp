@@ -59,12 +59,23 @@ class FrameRateTitle : public rex::ui::ImGuiDialog {
 
  protected:
   void OnDraw(ImGuiIO& io) override {
+#if NBAJAM_UWP
+    // A console shows no window title, so the rate goes in the corner.
+    char corner[32];
+    std::snprintf(corner, sizeof(corner), "%.0f fps", fps_);
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImVec2 size = ImGui::CalcTextSize(corner);
+    dl->AddRectFilled(ImVec2(16, 16), ImVec2(28 + size.x, 24 + size.y), IM_COL32(0, 0, 0, 140), 4);
+    dl->AddText(ImVec2(22, 20), fps_ >= 55 ? IM_COL32(120, 255, 120, 255)
+                                           : IM_COL32(255, 200, 80, 255), corner);
+#endif
     since_ += io.DeltaTime;
     if (since_ < kRewriteEvery) {
       return;
     }
     const uint64_t frames = g_guest_frames.load(std::memory_order_relaxed);
     const double fps = double(frames - last_frames_) / double(since_);
+    fps_ = fps;
     last_frames_ = frames;
     since_ = 0.0f;
     char text[128];
@@ -73,6 +84,7 @@ class FrameRateTitle : public rex::ui::ImGuiDialog {
   }
 
  private:
+  double fps_ = 0.0;
   rex::ui::Window* window_ = nullptr;
   uint64_t last_frames_ = 0;
   float since_ = kRewriteEvery;   // so the first frame writes it
