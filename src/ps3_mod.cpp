@@ -753,7 +753,9 @@ int NbaApplyPs3Mod(const fs::path& mod, const fs::path& game, std::ostream& stat
   for (auto it = fs::recursive_directory_iterator(data, ec);
        !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
     if (!it->is_regular_file(ec)) continue;
-    const std::string rel = fs::relative(it->path(), data, ec).generic_string();
+    // Worked out from the names alone: fs::relative asks the drive for each
+    // path's final form, which D:\\DevelopmentFiles does not answer.
+    const std::string rel = it->path().lexically_relative(data).generic_string();
     const std::string mapped = MapPath(rel);
     if (Skip(mapped)) {
       ++skipped;
@@ -797,7 +799,7 @@ int NbaApplyPs3Mod(const fs::path& mod, const fs::path& game, std::ostream& stat
     for (auto it = fs::recursive_directory_iterator(xenon, ec);
          !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
       if (!it->is_regular_file(ec)) continue;
-      const fs::path t = ps3 / fs::relative(it->path(), xenon, ec);
+      const fs::path t = ps3 / it->path().lexically_relative(xenon);
       fs::create_directories(t.parent_path(), ec);
       std::error_code lec;
       fs::create_hard_link(it->path(), t, lec);

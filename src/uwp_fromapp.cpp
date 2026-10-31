@@ -102,6 +102,12 @@ BOOL WINAPI HookCopyFileW(LPCWSTR from, LPCWSTR to, BOOL fail_if_exists) {
   return CopyFileFromAppW(from, to, fail_if_exists);
 }
 
+// std::filesystem::copy_file's call.
+HRESULT WINAPI HookCopyFile2(PCWSTR from, PCWSTR to, COPYFILE2_EXTENDED_PARAMETERS* params) {
+  const BOOL fail_if_exists = params && (params->dwCopyFlags & COPY_FILE_FAIL_IF_EXISTS);
+  return CopyFileFromAppW(from, to, fail_if_exists) ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+}
+
 struct Hook {
   const char* name;
   void* to;
@@ -120,6 +126,7 @@ const Hook kHooks[] = {
     {"SetFileAttributesW", reinterpret_cast<void*>(&HookSetFileAttributesW)},
     {"MoveFileExW", reinterpret_cast<void*>(&HookMoveFileExW)},
     {"CopyFileW", reinterpret_cast<void*>(&HookCopyFileW)},
+    {"CopyFile2", reinterpret_cast<void*>(&HookCopyFile2)},
 };
 
 // Points the named imports of one module at the hooks. Returns how many.
