@@ -184,8 +184,9 @@ std::wstring FolderName(const std::string& variant) {
 // What a mod app was last given, so it is applied once: the names and sizes
 // of the packages, or the opened mod folder.
 std::string ModSignature(const std::vector<fs::path>& pkgs, bool folder) {
-  // The converter's own revision, so a fixed one applies the mod again.
-  std::string sig = "converter 2\n";
+  // A line naming a converter revision can go first, so that a fix to the
+  // converter applies every mod again; none has been needed yet.
+  std::string sig;
   std::error_code ec;
   for (const auto& p : pkgs) {
     sig += p.filename().string() + " " + std::to_string(fs::file_size(p, ec)) + "\n";

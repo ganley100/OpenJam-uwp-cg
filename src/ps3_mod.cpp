@@ -589,9 +589,6 @@ bool Skip(const std::string& mapped) {
       std::regex("^xenon/saveload/"),
       std::regex("^xenon/genbigs/rend_misc_big\\.ast$"),
       std::regex("^xenon/bigs/audio/aemsdata\\.ast$"),
-      // The in-game scoreboard comes out wrong converted, on the console
-      // (2020s); the disc's own is left in place until the cause is known.
-      std::regex("(^|/)ge_hud_big\\.ast$"),
   };
   for (const auto& p : patterns) {
     if (std::regex_search(mapped, p)) return true;
