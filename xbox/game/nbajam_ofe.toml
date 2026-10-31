@@ -5,3 +5,7 @@
 # the console's drive, most of them the audio chip's register writes. Set
 # this back to "debug" to bring something new up on the console.
 log_level = "warning"
+
+# An even 30 frames a second on the console (src/window_title.cpp); 0 for
+# no cap.
+frame_rate_limit = 30

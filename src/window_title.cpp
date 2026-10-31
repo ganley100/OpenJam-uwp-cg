@@ -26,7 +26,18 @@
 #include <imgui.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
+#include <thread>
+
+#if defined(_WIN32)
+#include <windows.h>
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+#endif
+
+#include <rex/cvar.h>
 
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/imgui_drawer.h>
@@ -69,7 +80,59 @@ class FrameRateTitle : public rex::ui::ImGuiDialog {
 
 }  // namespace
 
+// A cap on the game's own frame rate: the pad poll that counts a frame
+// holds the guest there until the frame's share of a second has passed. The
+// Xbox build sets it to 30 (xbox/game/nbajam_ofe.toml), for an even pace on
+// the console's CPU rather than one that swings with how busy the court is.
+REXCVAR_DEFINE_INT32(frame_rate_limit, 0, "Game",
+                     "Cap the game's frame rate, in frames a second; 0 for no cap");
+
+namespace {
+
+// Waits until `until`. Windows' ordinary sleep is good to 15 ms or so, which
+// is half a frame at 30; a high-resolution timer is good to well under one.
+void WaitUntil(std::chrono::steady_clock::time_point until) {
+#if defined(_WIN32)
+  static thread_local HANDLE timer = CreateWaitableTimerExW(
+      nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+  const auto left = until - std::chrono::steady_clock::now();
+  if (timer && left > std::chrono::microseconds(500)) {
+    LARGE_INTEGER due;
+    due.QuadPart = -std::chrono::duration_cast<std::chrono::nanoseconds>(left).count() / 100;
+    if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+      WaitForSingleObject(timer, INFINITE);
+    }
+  }
+  // The last fraction, and everything where there is no such timer.
+  while (std::chrono::steady_clock::now() < until) {
+    std::this_thread::yield();
+  }
+#else
+  std::this_thread::sleep_until(until);
+#endif
+}
+
+void LimitFrameRate() {
+  const int32_t fps = REXCVAR_GET(frame_rate_limit);
+  if (fps <= 0) return;
+  using clock = std::chrono::steady_clock;
+  const auto period = std::chrono::nanoseconds(1000000000LL / fps);
+  static clock::time_point next{};
+  const auto now = clock::now();
+  if (next == clock::time_point{} || now > next + period * 4) {
+    // First frame, or far behind (a load, a suspend): start the beat again
+    // from here rather than racing to catch up.
+    next = now + period;
+    return;
+  }
+  if (now < next) WaitUntil(next);
+  next += period;
+}
+
+}  // namespace
+
 void NbaGuestFrame() {
+  LimitFrameRate();
   g_guest_frames.fetch_add(1, std::memory_order_relaxed);
 }
 
