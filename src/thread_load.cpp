@@ -55,7 +55,7 @@ void NbaThreadLoadUse(rex::Runtime* runtime) {
 
 std::string NbaThreadLoad() {
   std::lock_guard lock(g_mutex);
-  if (!g_runtime || !g_runtime->kernel_state()) return {};
+  if (!g_runtime || !g_runtime->kernel_state()) return "(no runtime to ask yet)";
   const auto now = std::chrono::steady_clock::now();
   const double wall =
       std::chrono::duration<double>(now - g_last_at).count() * 1e7;  // in 100 ns
@@ -66,24 +66,51 @@ std::string NbaThreadLoad() {
   };
   std::vector<Load> loads;
   std::map<void*, uint64_t> seen;
+  int listed = 0, timed = 0;
   auto threads = g_runtime->kernel_state()
                      ->object_table()
                      ->GetObjectsByType<rex::system::XThread>();
   for (auto& t : threads) {
+    ++listed;
     rex::thread::Thread* native = t->thread();
     if (!native) continue;
     void* handle = native->native_handle();
     const uint64_t cpu = CpuTime(handle);
+    if (cpu) ++timed;
     seen[handle] = cpu;
     auto it = g_last.find(handle);
     if (it == g_last.end() || wall <= 0) continue;
     const double share = double(cpu - it->second) / wall;
-    if (share >= 0.05) loads.push_back({native->name(), share});
+    if (share >= 0.02) loads.push_back({native->name(), share});
   }
   g_last = std::move(seen);
   std::sort(loads.begin(), loads.end(), [](const Load& a, const Load& b) { return a.share > b.share; });
+  // The whole process too, which does not depend on the thread list: over
+  // 100% means more than one core's worth.
   std::string out;
-  for (size_t i = 0; i < loads.size() && i < 5; ++i) {
+#if defined(_WIN32)
+  {
+    static uint64_t last_process = 0;
+    FILETIME created, exited, kernel, user;
+    if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+      auto u64 = [](const FILETIME& f) { return uint64_t(f.dwHighDateTime) << 32 | f.dwLowDateTime; };
+      const uint64_t total = u64(kernel) + u64(user);
+      if (last_process && wall > 0) {
+        char part[48];
+        std::snprintf(part, sizeof(part), "whole game %.0f%%; ",
+                      double(total - last_process) / wall * 100.0);
+        out += part;
+      }
+      last_process = total;
+    }
+  }
+#endif
+  {
+    char part[64];
+    std::snprintf(part, sizeof(part), "%d threads, %d timed; ", listed, timed);
+    out += part;
+  }
+  for (size_t i = 0; i < loads.size() && i < 6; ++i) {
     char part[96];
     std::snprintf(part, sizeof(part), "%s%s %.0f%%", i ? ", " : "", loads[i].name.c_str(),
                   loads[i].share * 100.0);

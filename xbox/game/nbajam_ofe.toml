@@ -1,11 +1,21 @@
-# Runtime settings shipped beside the Xbox build's executable, where ReXApp
-# looks for <name>.toml.
+# NBA JAM settings for the Xbox apps.
 #
+# The first start copies this file into the app's LocalState, and the app
+# reads it from there afterwards: change it in Device Portal (File Explorer,
+# LocalAppData, the app, LocalState, nbajam_ofe.toml), then start the game
+# again. Delete it there to go back to these defaults.
+
 # Warnings and errors only: debug logging wrote some 350 lines a second to
-# the console's drive, most of them the audio chip's register writes. Set
-# this back to "debug" to bring something new up on the console.
+# the console's drive. "debug" to bring something new up on the console.
 log_level = "warning"
 
-# No cap on the frame rate (src/window_title.cpp). The game's pace is tied
-# to its frame rate: held to 30 it played at half speed on the console.
+# No cap on the frame rate: the game's pace is tied to its frame rate, so a
+# cap below 60 plays it in slow motion.
 frame_rate_limit = 0
+
+# Graphics settings worth trying when matches draw slowly. Each makes the
+# CPU wait for the GPU partway through a frame; turning one off can be much
+# faster, at the risk of a missing effect. Change true to false, one at a
+# time, and compare fps.txt.
+readback_memexport = true
+occlusion_query_enable = true
