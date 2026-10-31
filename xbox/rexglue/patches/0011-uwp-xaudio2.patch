@@ -1,0 +1,261 @@
+diff --git a/include/rex/audio/xaudio2/xaudio2_audio_system.h b/include/rex/audio/xaudio2/xaudio2_audio_system.h
+new file mode 100644
+index 0000000..5c110d7
+--- /dev/null
++++ b/include/rex/audio/xaudio2/xaudio2_audio_system.h
+@@ -0,0 +1,31 @@
++/**
++ * @file        audio/xaudio2/xaudio2_audio_system.h
++ * @brief       XAudio2 audio backend, for the UWP build (Xbox One)
++ *
++ * @remarks     OpenJam patch (REXGLUE_UWP). A UWP build has no SDL, so this
++ *              plays the guest's frames through XAudio2 2.9, which every
++ *              Windows 10 device has. Where XAudio2 cannot be opened it
++ *              falls back to the silent backend, which keeps the guest's
++ *              audio engine running at the right rate.
++ */
++
++#pragma once
++
++#include <rex/audio/silent/silent_audio_system.h>
++
++namespace rex::audio::xaudio2 {
++
++class XAudio2AudioSystem : public silent::SilentAudioSystem {
++ public:
++  explicit XAudio2AudioSystem(runtime::FunctionDispatcher* function_dispatcher);
++  ~XAudio2AudioSystem() override;
++
++  static bool IsAvailable() { return true; }
++
++  static std::unique_ptr<AudioSystem> Create(runtime::FunctionDispatcher* function_dispatcher);
++
++  X_STATUS CreateDriver(size_t index, rex::thread::Semaphore* semaphore,
++                        AudioDriver** out_driver) override;
++};
++
++}  // namespace rex::audio::xaudio2
+diff --git a/src/audio/CMakeLists.txt b/src/audio/CMakeLists.txt
+index f3cb115..2f5c7e0 100644
+--- a/src/audio/CMakeLists.txt
++++ b/src/audio/CMakeLists.txt
+@@ -14,7 +14,11 @@ add_library(rexaudio OBJECT
+     # Silent backend: consumes frames in real time (OpenJam)
+     silent/silent_audio_system.cpp
+ )
+-# OpenJam: a UWP build has no SDL3, and so no sound yet.
++# OpenJam: a UWP build has no SDL3; it plays through XAudio2 instead.
++if(REXGLUE_UWP)
++    target_sources(rexaudio PRIVATE xaudio2/xaudio2_audio_system.cpp)
++    target_link_libraries(rexaudio PUBLIC xaudio2.lib)
++endif()
+ if(NOT REXGLUE_UWP)
+     target_sources(rexaudio PRIVATE
+         sdl/sdl_audio_system.cpp
+diff --git a/src/audio/xaudio2/xaudio2_audio_system.cpp b/src/audio/xaudio2/xaudio2_audio_system.cpp
+new file mode 100644
+index 0000000..3d5fd10
+--- /dev/null
++++ b/src/audio/xaudio2/xaudio2_audio_system.cpp
+@@ -0,0 +1,174 @@
++/**
++ * @file        audio/xaudio2/xaudio2_audio_system.cpp
++ * @brief       XAudio2 audio backend, for the UWP build (Xbox One)
++ *
++ * @remarks     OpenJam patch (REXGLUE_UWP). See the header.
++ */
++
++#include <rex/audio/xaudio2/xaudio2_audio_system.h>
++
++#include <atomic>
++#include <cstring>
++#include <memory>
++#include <vector>
++
++#include <windows.h>
++#include <mmreg.h>
++#include <xaudio2.h>
++
++#include <rex/audio/audio_driver.h>
++#include <rex/audio/conversion.h>
++#include <rex/audio/downmix.h>
++#include <rex/audio/flags.h>
++#include <rex/cvar.h>
++#include <rex/logging.h>
++#include <rex/thread.h>
++
++// The SDL driver defines this on other builds; a UWP build has no SDL driver.
++REXCVAR_DEFINE_BOOL(audio_mute, false, "Audio", "Mute audio output");
++
++namespace rex::audio::xaudio2 {
++
++namespace {
++
++// A guest frame: 256 samples for each of 6 channels, 48 kHz, big-endian
++// float, channel after channel.
++constexpr uint32_t kFrequency = 48000;
++constexpr uint32_t kChannelSamples = 256;
++constexpr uint32_t kGuestChannels = 6;
++// The audio system keeps a handful of frames in flight; this is well past
++// that, so a buffer is never rewritten while XAudio2 still holds it.
++constexpr size_t kRing = 64;
++
++// Spelled out rather than taken from ksmedia.h, which an app may not have.
++constexpr DWORD kStereo = 0x1 | 0x2;                          // front left, right
++constexpr DWORD kSurround = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20;  // 5.1
++const GUID kIeeeFloat = {0x00000003, 0x0000, 0x0010,
++                         {0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71}};
++
++class XAudio2Driver final : public AudioDriver, public IXAudio2VoiceCallback {
++ public:
++  XAudio2Driver(memory::Memory* memory, rex::thread::Semaphore* semaphore)
++      : AudioDriver(memory), semaphore_(semaphore) {}
++
++  ~XAudio2Driver() override {
++    if (voice_) {
++      voice_->Stop(0);
++      voice_->DestroyVoice();
++    }
++    if (master_) master_->DestroyVoice();
++    if (xaudio2_) xaudio2_->Release();
++  }
++
++  bool Initialize() {
++    HRESULT hr = XAudio2Create(&xaudio2_, 0, XAUDIO2_DEFAULT_PROCESSOR);
++    if (FAILED(hr)) {
++      REXAPU_ERROR("XAudio2Create failed: {:08X}", uint32_t(hr));
++      return false;
++    }
++    hr = xaudio2_->CreateMasteringVoice(&master_);
++    if (FAILED(hr)) {
++      REXAPU_ERROR("XAudio2 CreateMasteringVoice failed: {:08X}", uint32_t(hr));
++      return false;
++    }
++    XAUDIO2_VOICE_DETAILS details{};
++    master_->GetVoiceDetails(&details);
++    // Surround where the console outputs it, stereo otherwise.
++    channels_ = details.InputChannels >= 6 ? 6 : 2;
++
++    WAVEFORMATEXTENSIBLE fmt{};
++    fmt.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
++    fmt.Format.nChannels = WORD(channels_);
++    fmt.Format.nSamplesPerSec = kFrequency;
++    fmt.Format.wBitsPerSample = 32;
++    fmt.Format.nBlockAlign = WORD(channels_ * sizeof(float));
++    fmt.Format.nAvgBytesPerSec = kFrequency * fmt.Format.nBlockAlign;
++    fmt.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
++    fmt.Samples.wValidBitsPerSample = 32;
++    fmt.dwChannelMask = channels_ == 6 ? kSurround : kStereo;
++    fmt.SubFormat = kIeeeFloat;
++    hr = xaudio2_->CreateSourceVoice(&voice_, &fmt.Format, 0, XAUDIO2_DEFAULT_FREQ_RATIO, this);
++    if (FAILED(hr)) {
++      REXAPU_ERROR("XAudio2 CreateSourceVoice failed: {:08X}", uint32_t(hr));
++      return false;
++    }
++    ring_.resize(kRing * kChannelSamples * channels_);
++    hr = voice_->Start(0);
++    if (FAILED(hr)) {
++      REXAPU_ERROR("XAudio2 Start failed: {:08X}", uint32_t(hr));
++      return false;
++    }
++    REXAPU_INFO("XAudio2: {} Hz output, {} channel(s) in, playing {}", details.InputSampleRate,
++                details.InputChannels, channels_);
++    return true;
++  }
++
++  void SubmitFrame(uint32_t frame_ptr) override {
++    const auto input = memory_->TranslateVirtual<const float*>(frame_ptr);
++    const size_t samples = size_t(kChannelSamples) * channels_;
++    float* out = ring_.data() + (next_ % kRing) * samples;
++    ++next_;
++    if (REXCVAR_GET(audio_mute)) {
++      std::memset(out, 0, samples * sizeof(float));
++    } else if (channels_ == 6) {
++      conversion::sequential_6_BE_to_interleaved_6_LE(out, input, kChannelSamples,
++                                                      GetSurroundMix(), GetOutputGain());
++    } else {
++      conversion::sequential_6_BE_to_interleaved_2_LE(out, input, kChannelSamples,
++                                                      GetStereoFold(), GetOutputGain());
++    }
++    XAUDIO2_BUFFER buffer{};
++    buffer.AudioBytes = UINT32(samples * sizeof(float));
++    buffer.pAudioData = reinterpret_cast<const BYTE*>(out);
++    if (FAILED(voice_->SubmitSourceBuffer(&buffer))) {
++      // Not played, so nothing will say it finished: say so here, or the
++      // guest's audio engine waits for it forever.
++      semaphore_->Release(1, nullptr);
++    }
++  }
++
++  // IXAudio2VoiceCallback. A finished buffer is room for the guest's next.
++  void STDMETHODCALLTYPE OnBufferEnd(void*) override { semaphore_->Release(1, nullptr); }
++  void STDMETHODCALLTYPE OnVoiceProcessingPassStart(UINT32) override {}
++  void STDMETHODCALLTYPE OnVoiceProcessingPassEnd() override {}
++  void STDMETHODCALLTYPE OnStreamEnd() override {}
++  void STDMETHODCALLTYPE OnBufferStart(void*) override {}
++  void STDMETHODCALLTYPE OnLoopEnd(void*) override {}
++  void STDMETHODCALLTYPE OnVoiceError(void*, HRESULT error) override {
++    REXAPU_ERROR("XAudio2 voice error: {:08X}", uint32_t(error));
++  }
++
++ private:
++  rex::thread::Semaphore* semaphore_;
++  IXAudio2* xaudio2_ = nullptr;
++  IXAudio2MasteringVoice* master_ = nullptr;
++  IXAudio2SourceVoice* voice_ = nullptr;
++  uint32_t channels_ = 2;
++  std::vector<float> ring_;
++  uint64_t next_ = 0;
++};
++
++}  // namespace
++
++std::unique_ptr<AudioSystem> XAudio2AudioSystem::Create(
++    runtime::FunctionDispatcher* function_dispatcher) {
++  return std::make_unique<XAudio2AudioSystem>(function_dispatcher);
++}
++
++XAudio2AudioSystem::XAudio2AudioSystem(runtime::FunctionDispatcher* function_dispatcher)
++    : silent::SilentAudioSystem(function_dispatcher) {}
++
++XAudio2AudioSystem::~XAudio2AudioSystem() = default;
++
++X_STATUS XAudio2AudioSystem::CreateDriver(size_t index, rex::thread::Semaphore* semaphore,
++                                          AudioDriver** out_driver) {
++  auto driver = std::make_unique<XAudio2Driver>(memory_, semaphore);
++  if (driver->Initialize()) {
++    *out_driver = driver.release();
++    return X_STATUS_SUCCESS;
++  }
++  REXAPU_WARN("XAudio2 unavailable; the game runs without sound");
++  return silent::SilentAudioSystem::CreateDriver(index, semaphore, out_driver);
++}
++
++}  // namespace rex::audio::xaudio2
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index 428f31d..fc0288a 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -28,6 +28,7 @@
+ #include <rex/audio/audio_system.h>
+ #if REXGLUE_UWP
+ #include <rex/audio/silent/silent_audio_system.h>
++#include <rex/audio/xaudio2/xaudio2_audio_system.h>
+ #else
+ #include <rex/audio/sdl/sdl_audio_system.h>
+ #endif
+@@ -326,10 +327,10 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
+ bool ReXApp::SetupPresentation() {
+   config_.gpu_plugin = REXCVAR_GET(gpu_plugin);
+ #if REXGLUE_UWP
+-  // OpenJam: SDL3 is the only real audio backend, and a UWP build has none.
+-  // The nop backend refuses the guest's audio client, which a title may not
+-  // survive; the silent one runs it in real time and plays nothing.
+-  config_.audio_factory = REX_AUDIO_BACKEND(rex::audio::silent::SilentAudioSystem);
++  // OpenJam: a UWP build has no SDL3, so it plays through XAudio2, falling
++  // back to the silent backend (which runs the guest's audio engine in real
++  // time and plays nothing) where XAudio2 will not open.
++  config_.audio_factory = REX_AUDIO_BACKEND(rex::audio::xaudio2::XAudio2AudioSystem);
+ #else
+   config_.audio_factory = REX_AUDIO_BACKEND(rex::audio::sdl::SDLAudioSystem);
+ #endif
