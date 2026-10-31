@@ -421,9 +421,20 @@ void NbaUwpNoGame() {
                 L"Then start the app again. The first start unpacks the game and "
                 L"applies the mod, which takes a few minutes; status.txt in LocalState "
                 L"says how it went.";
+  // What status.txt says comes first: it names the step that stopped, which
+  // is what decides what to do, and the TV is easier to read than Device
+  // Portal.
+  std::wstring said;
+  {
+    const std::string st = ReadText(NbaUwpLocalState() / "status.txt");
+    said.assign(st.begin(), st.end());
+    if (said.size() > 1500) said = L"...\n" + said.substr(said.size() - 1500);
+  }
+  const std::wstring shown =
+      said.empty() ? text : L"What happened:\n\n" + said + L"\n\n" + text;
   bool done = false;
   try {
-    Popups::MessageDialog dialog(winrt::hstring(text), L"NBA JAM: On Fire Edition");
+    Popups::MessageDialog dialog(winrt::hstring(shown), L"NBA JAM: On Fire Edition");
     dialog.ShowAsync().Completed([&done](auto&&, auto&&) { done = true; });
     // Pump the window's events here, on its thread, until the dialog closes.
     auto dispatcher = Core::CoreWindow::GetForCurrentThread().Dispatcher();
