@@ -10,6 +10,8 @@
 # are left off until these have been played.
 ctr_as_local = true
 xer_as_local = true
-reserved_as_local = true
+# Off: with it on, the game froze at startup on the console - it changes
+# the lwarx/stwcx reservation the game's atomic operations retry on.
+reserved_as_local = false
 cr_as_local = true
 non_argument_as_local = true
