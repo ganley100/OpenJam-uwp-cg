@@ -1,0 +1,18 @@
+diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
+index 00e86da..4fe7645 100644
+--- a/src/ui/presenter.cpp
++++ b/src/ui/presenter.cpp
+@@ -1489,7 +1489,12 @@ bool Presenter::InSurfaceOnMonitorFromUIThread() const {
+   if (!surface_) {
+     return false;
+   }
+-#if REX_PLATFORM_WIN32
++#if REXGLUE_UWP
++  // OpenJam: an app's CoreWindow is always on the one display, and an app has
++  // no MonitorFromWindow to say so - without this the UI thread never paints
++  // and the screen stays black while the game runs.
++  return true;
++#elif REX_PLATFORM_WIN32
+   return surface_win32_monitor_ != nullptr;
+ #else
+   return true;
