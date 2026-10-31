@@ -1,0 +1,15 @@
+# Codegen options for the Xbox build only (.github/workflows/xbox-rexglue.yml
+# adds this file to the manifest's includes before codegen).
+#
+# On the console one of the game's threads sits at a whole Jaguar core in a
+# match and the game draws 12 to 16 frames a second. By default every guest
+# register lives in the PPCContext in memory, so each instruction is loads
+# and stores; these keep registers in C++ locals the compiler can put in
+# host registers. The ones here are the ones that are safe for code that
+# makes no unusual use of them; non_volatile_as_local, skip_lr and skip_msr
+# are left off until these have been played.
+ctr_as_local = true
+xer_as_local = true
+reserved_as_local = true
+cr_as_local = true
+non_argument_as_local = true
