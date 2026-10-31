@@ -6,19 +6,12 @@
 # the console's drive. "debug" to bring something new up on the console.
 log_level = "warning"
 
-# No cap on the frame rate: the game's pace is tied to its frame rate, so a
-# cap below 60 plays it in slow motion.
+# No cap on the game itself: its pace is tied to its frame rate, so a cap
+# below 60 plays it in slow motion.
 frame_rate_limit = 0
 
-# Matches drew only 12 to 16 frames a second on the console. Each of these
-# makes the CPU wait for the GPU partway through a frame, so both are off
-# here; if an effect goes missing in a match, one of them is the cause.
-readback_memexport = false
-occlusion_query_enable = false
-
-# The video mode the game is told the console is in. Matches drew 12 to 16
-# frames a second at 1280x720, with the GPU translation busiest there; a
-# widescreen standard-definition mode lets the game draw a smaller frame,
-# which the console then scales up to the TV. 1280 and 720 for full HD.
-video_mode_width = 854
-video_mode_height = 480
+# What reaches the TV is held to an even 30 frames a second instead: each
+# frame stays up for two refreshes. A match draws fewer than 30 on an Xbox
+# One S, and frames arriving unevenly at up to 60 felt worse than a steady
+# 30. 1 for up to 60.
+present_interval = 2

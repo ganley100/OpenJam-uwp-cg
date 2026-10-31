@@ -1,0 +1,25 @@
+diff --git a/src/ui/d3d12/d3d12_presenter.cpp b/src/ui/d3d12/d3d12_presenter.cpp
+index bb9676e..1413a01 100644
+--- a/src/ui/d3d12/d3d12_presenter.cpp
++++ b/src/ui/d3d12/d3d12_presenter.cpp
+@@ -33,6 +33,10 @@
+ #include <ffx_api/ffx_upscale.h>
+ #endif
+ 
++// OpenJam: on the console, how many display refreshes each frame stays up
++// for: 1 for up to 60 new frames a second, 2 for an even 30.
++REXCVAR_DEFINE_INT32(present_interval, 1, "UI/D3D12",
++                     "Console only: display refreshes per presented frame (1 = 60, 2 = 30)");
+ REXCVAR_DEFINE_BOOL(d3d12_allow_variable_refresh_rate_and_tearing, true, "UI/D3D12",
+                     "Allow variable refresh rate and tearing");
+ 
+@@ -1179,7 +1183,8 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
+   // so unpaced it had frames replaced before they were shown - 60 drawn,
+   // fewer seen, unevenly, and play that felt like 30. With a sync interval
+   // of 1 each frame is on screen for a refresh of its own.
+-  HRESULT present_result = paint_context_.swap_chain->Present(1, 0);
++  HRESULT present_result = paint_context_.swap_chain->Present(
++      UINT(std::clamp(REXCVAR_GET(present_interval), 1, 4)), 0);
+ #else
+   HRESULT present_result = paint_context_.swap_chain->Present(
+       0, DXGI_PRESENT_RESTART |

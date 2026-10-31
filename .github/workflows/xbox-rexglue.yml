@@ -313,15 +313,6 @@ jobs:
           New-Item -ItemType Directory -Force generated | Out-Null
           Copy-Item $found.FullName generated/rexglue.cmake
 
-      # Faster generated code for the console: guest registers in locals.
-      # Only this job, so the PC build's code is unchanged.
-      - name: Codegen speed options
-        run: |
-          $m = Get-Content nbajam_ofe_manifest.toml -Raw
-          $m = $m -replace 'includes = \[', 'includes = ["xbox/game/codegen_speed.toml", '
-          Set-Content nbajam_ofe_manifest.toml $m -NoNewline
-          Select-String -Path nbajam_ofe_manifest.toml -Pattern "includes"
-
       - name: Configure game (UWP)
         run: |
           cmake -S . -B out/build/game-uwp -G Ninja "-DCMAKE_BUILD_TYPE=$env:CONFIG" `
