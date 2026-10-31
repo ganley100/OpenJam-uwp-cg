@@ -62,6 +62,20 @@ jobs:
           "REXGLUE_PREFIX=$prefix" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           $cli.Directory.FullName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
+      # The game's executable is kept encrypted in the repository; XEX_KEY
+      # (a repository secret) opens it.
+      - name: Decrypt game executable
+        shell: bash
+        env:
+          XEX_KEY: ${{ secrets.XEX_KEY }}
+        run: |
+          if [ -z "$XEX_KEY" ]; then
+            echo "::error::The XEX_KEY secret is missing (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+            -in game/default.xex.enc -out game/default.xex -pass env:XEX_KEY
+
       - name: Game executable
         run: |
           # The manifest reads ../Root/default.xex, relative to the project.
@@ -118,7 +132,7 @@ jobs:
         with:
           name: nbajam_ofe-windows
           path: ${{ runner.temp }}/nbajam_ofe
-          retention-days: 14
+          retention-days: 1
 
       - name: Logs on failure
         if: failure()

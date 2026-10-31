@@ -22,3 +22,4 @@ metadata/icons/
 # Python bytecode from the tools
 __pycache__/
 *.pyc
+game/default.xex

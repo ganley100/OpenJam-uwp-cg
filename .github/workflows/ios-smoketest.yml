@@ -25,4 +25,4 @@ jobs:
         with:
           name: openjam-ios-smoketest
           path: ${{ runner.temp }}/ios/OpenJamTest.ipa
-          retention-days: 30
+          retention-days: 1

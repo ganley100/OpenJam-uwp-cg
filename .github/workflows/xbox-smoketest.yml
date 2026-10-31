@@ -54,4 +54,4 @@ jobs:
         with:
           name: openjam-xbox-smoketest
           path: out/appx
-          retention-days: 30
+          retention-days: 1

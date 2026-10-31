@@ -98,6 +98,20 @@ jobs:
         if: always()
         run: sccache --show-stats
 
+      # The game's executable is kept encrypted in the repository; XEX_KEY
+      # (a repository secret) opens it.
+      - name: Decrypt game executable
+        shell: bash
+        env:
+          XEX_KEY: ${{ secrets.XEX_KEY }}
+        run: |
+          if [ -z "$XEX_KEY" ]; then
+            echo "::error::The XEX_KEY secret is missing (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+            -in game/default.xex.enc -out game/default.xex -pass env:XEX_KEY
+
       # From here on, the same steps as build.yml, against the SDK just built.
       - name: Game executable
         run: |
@@ -148,7 +162,7 @@ jobs:
         with:
           name: nbajam_ofe-windows-sdk-from-source
           path: ${{ runner.temp }}/nbajam_ofe
-          retention-days: 7
+          retention-days: 1
 
   # The SDK built for the Xbox (REXGLUE_UWP=ON). Keeps going past errors so
   # one run reports all of them, then lists which Windows DLLs the runtime
@@ -261,6 +275,20 @@ jobs:
           "REXGLUE_CLI=$($cli.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           $global:LASTEXITCODE = 0
 
+      # The game's executable is kept encrypted in the repository; XEX_KEY
+      # (a repository secret) opens it.
+      - name: Decrypt game executable
+        shell: bash
+        env:
+          XEX_KEY: ${{ secrets.XEX_KEY }}
+        run: |
+          if [ -z "$XEX_KEY" ]; then
+            echo "::error::The XEX_KEY secret is missing (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+            -in game/default.xex.enc -out game/default.xex -pass env:XEX_KEY
+
       # The game, as the Xbox app (NBAJAM_UWP), against that SDK.
       - name: Game executable
         run: |
@@ -371,10 +399,10 @@ jobs:
         with:
           name: linker-maps
           path: out/maps
-          retention-days: 30
+          retention-days: 1
 
       - uses: actions/upload-artifact@v4
         with:
           name: nbajam-xbox-appx
           path: out/appx
-          retention-days: 30
+          retention-days: 1

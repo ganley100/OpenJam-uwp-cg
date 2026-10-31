@@ -111,6 +111,21 @@ jobs:
           "$cli" --help | head -5 || true
           echo "REXGLUE_CLI=$cli" >> "$GITHUB_ENV"
 
+      # The game's executable is kept encrypted in the repository; XEX_KEY
+      # (a repository secret) opens it.
+      - name: Decrypt game executable
+        if: inputs.stage == 'game'
+        shell: bash
+        env:
+          XEX_KEY: ${{ secrets.XEX_KEY }}
+        run: |
+          if [ -z "$XEX_KEY" ]; then
+            echo "::error::The XEX_KEY secret is missing (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+            -in game/default.xex.enc -out game/default.xex -pass env:XEX_KEY
+
       # The manifest names the executable as ../Root/default.xex.
       - name: Game executable
         if: inputs.stage == 'game'
@@ -184,7 +199,7 @@ jobs:
         with:
           name: nbajam-ios-ipa
           path: ${{ runner.temp }}/ipa/*.ipa
-          retention-days: 14
+          retention-days: 1
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -194,4 +209,4 @@ jobs:
             ${{ runner.temp }}/configure.log
             ${{ runner.temp }}/build.log
             ${{ runner.temp }}/game-build.log
-          retention-days: 7
+          retention-days: 1
