@@ -139,16 +139,39 @@ std::vector<XEntry> XList(const fs::path& dir) {
   return out;
 }
 
+// Why the last XCopy failed, for status.txt.
+std::string g_copy_error;
+
+std::string ErrorText(const char* what, DWORD code) {
+  const char* name = code == ERROR_ACCESS_DENIED        ? " (access denied)"
+                     : code == ERROR_SHARING_VIOLATION   ? " (the file is in use)"
+                     : code == ERROR_DISK_FULL           ? " (the drive is full)"
+                     : code == ERROR_FILE_NOT_FOUND      ? " (not found)"
+                     : code == ERROR_PATH_NOT_FOUND      ? " (path not found)"
+                     : code == ERROR_HANDLE_DISK_FULL    ? " (the drive is full)"
+                                                         : "";
+  return std::string(what) + ": Windows error " + std::to_string(code) + name;
+}
+
 // Copies one file, keeping its write time so a later sync can tell it is
-// the same.
+// the same. The system's own copy first; then by hand, sharing the file with
+// whatever else has it open (Device Portal may, just after an upload).
 bool XCopy(const fs::path& from, const fs::path& to) {
   std::error_code ec;
   fs::create_directories(to.parent_path(), ec);
-  HANDLE in = CreateFile2FromAppW(from.c_str(), GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING,
-                                 nullptr);
-  if (in == INVALID_HANDLE_VALUE) return false;
+  g_copy_error.clear();
+  if (CopyFileFromAppW(from.c_str(), to.c_str(), FALSE)) return true;
+  g_copy_error = ErrorText("system copy", GetLastError());
+
+  constexpr DWORD kShare = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+  HANDLE in = CreateFile2FromAppW(from.c_str(), GENERIC_READ, kShare, OPEN_EXISTING, nullptr);
+  if (in == INVALID_HANDLE_VALUE) {
+    g_copy_error += "; " + ErrorText("opening it", GetLastError());
+    return false;
+  }
   HANDLE out = CreateFile2FromAppW(to.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
   if (out == INVALID_HANDLE_VALUE) {
+    g_copy_error += "; " + ErrorText("creating the copy", GetLastError());
     CloseHandle(in);
     return false;
   }
@@ -157,11 +180,13 @@ bool XCopy(const fs::path& from, const fs::path& to) {
   for (;;) {
     DWORD got = 0, put = 0;
     if (!ReadFile(in, buf.data(), DWORD(buf.size()), &got, nullptr)) {
+      g_copy_error += "; " + ErrorText("reading it", GetLastError());
       ok = false;
       break;
     }
     if (got == 0) break;
     if (!WriteFile(out, buf.data(), got, &put, nullptr) || put != got) {
+      g_copy_error += "; " + ErrorText("writing the copy", GetLastError());
       ok = false;
       break;
     }
@@ -172,7 +197,11 @@ bool XCopy(const fs::path& from, const fs::path& to) {
   }
   CloseHandle(in);
   CloseHandle(out);
-  if (!ok) fs::remove(to, ec);
+  if (ok) {
+    g_copy_error.clear();
+  } else {
+    fs::remove(to, ec);
+  }
   return ok;
 }
 
@@ -210,7 +239,7 @@ int XSyncTree(const fs::path& from, const fs::path& to, bool top, std::ostream& 
     XEntry have;
     if (XStat(dst, &have) && have.size == e.size && have.mtime == e.mtime) continue;
     if (!XCopy(src, dst)) {
-      status << "could not copy " << src.string() << "\n";
+      status << "could not copy " << src.string() << " - " << g_copy_error << "\n";
       return -1;
     }
     if (++copied % 250 == 0) {
@@ -238,16 +267,55 @@ void XStamp(const fs::path& from, bool top, std::string& out) {
   }
 }
 
+std::wstring LowerW(std::wstring s) {
+  for (wchar_t& c : s) c = wchar_t(towlower(c));
+  return s;
+}
+
+// Whether a folder name is meant for this app: the exact name, or near it -
+// "NBA Jam 2020", "nbajam-legends" - since a name typed in a browser is easy
+// to get a character off. The base game's folder is one with "jam" in it and
+// no mod's name.
+bool NameFits(const std::wstring& folder, const std::string& variant) {
+  const std::wstring f = LowerW(folder);
+  if (f.find(L"jam") == std::wstring::npos) return false;
+  const bool is_2020 = f.find(L"2020") != std::wstring::npos;
+  const bool is_legends = f.find(L"legend") != std::wstring::npos;
+  if (variant.empty()) return !is_2020 && !is_legends;
+  if (variant == "2020s") return is_2020;
+  if (variant == "Legends") return is_legends;
+  return false;
+}
+
+// The folders looked in, in order: D:\DevelopmentFiles, then each drive's
+// root (a USB drive).
+std::vector<fs::path> ExternalRoots() {
+  std::vector<fs::path> roots = {L"D:\\DevelopmentFiles"};
+  for (wchar_t d = L'E'; d <= L'Z'; ++d) roots.push_back(std::wstring(1, d) + L":\\");
+  return roots;
+}
+
 // The folder this app's game is in on a USB drive or in Development Files,
-// or nothing: D:\DevelopmentFiles\<name> first, then <drive>:\<name>.
-fs::path ExternalFolder(const std::wstring& name) {
-  const fs::path dev = fs::path(L"D:\\DevelopmentFiles") / name;
-  if (XIsDir(dev)) return dev;
-  for (wchar_t d = L'E'; d <= L'Z'; ++d) {
-    const fs::path p = fs::path(std::wstring(1, d) + L":\\") / name;
-    if (XIsDir(p)) return p;
+// or nothing: the exact name first, anywhere, then a near one.
+fs::path ExternalFolder(const std::wstring& name, const std::string& variant) {
+  for (const fs::path& root : ExternalRoots()) {
+    if (XIsDir(root / name)) return root / name;
+  }
+  for (const fs::path& root : ExternalRoots()) {
+    for (const XEntry& e : XList(root)) {
+      if (e.dir && NameFits(e.name, variant)) return root / e.name;
+    }
   }
   return {};
+}
+
+// What is in Development Files, for status.txt when nothing fits.
+std::string DevelopmentFilesListing() {
+  std::string out;
+  for (const XEntry& e : XList(L"D:\\DevelopmentFiles")) {
+    if (e.dir) out += "  " + fs::path(e.name).string() + "\\\n";
+  }
+  return out.empty() ? "  (nothing, or not readable)\n" : out;
 }
 
 std::wstring FolderName(const std::string& variant) {
@@ -276,7 +344,7 @@ fs::path Bring(const fs::path& folder, const fs::path& local, bool (*want)(const
       status << "copying " << (folder / e.name).string() << " into LocalState\n";
       status.flush();
       if (!XCopy(folder / e.name, to)) {
-        status << "could not copy it\n";
+        status << "could not copy it - " << g_copy_error << "\n";
         continue;
       }
     }
@@ -338,14 +406,17 @@ std::filesystem::path NbaUwpGameRoot() {
     const fs::path base_marker = game / "openjam_unpacked.txt";
     std::error_code ec;
 
-    const fs::path own = ExternalFolder(FolderName(variant));
-    const fs::path shared = variant.empty() ? fs::path() : ExternalFolder(FolderName(""));
+    const fs::path own = ExternalFolder(FolderName(variant), variant);
+    const fs::path shared = variant.empty() ? fs::path() : ExternalFolder(FolderName(""), "");
     status << "looked for " << fs::path(FolderName(variant)).string()
            << " in D:\\DevelopmentFiles and on USB drives: "
            << (own.empty() ? "not found" : own.string()) << "\n";
     if (!variant.empty()) {
       status << "and for the plain game in NBA JAM: "
              << (shared.empty() ? "not found" : shared.string()) << "\n";
+    }
+    if (own.empty()) {
+      status << "folders in D:\\DevelopmentFiles:\n" << DevelopmentFilesListing();
     }
 
     // Loose files outside, mirrored in. A change means the mod has to go on
@@ -504,7 +575,7 @@ std::filesystem::path NbaUwpGameRoot() {
           status.flush();
           const fs::path to = local / L"import" / pkgs[i].name;
           if (!XCopy(p, to)) {
-            status << "could not copy it\n";
+            status << "could not copy it - " << g_copy_error << "\n";
             return {};
           }
           p = to;
