@@ -12,6 +12,7 @@ on:
       - "xbox/rexglue/**"
       - "xbox/game/**"
       - "xbox/smoketest/**"
+      - "packaging/xbox/**"
       - "src/**"
       - "CMakeLists.txt"
       - "*.toml"
