@@ -16,9 +16,7 @@ param(
     # Which app: the base game, or the mod it plays. Each installs as its
     # own app, with its own storage and saves.
     [ValidateSet("base", "2020s", "Legends")]
-    [string]$Variant = "base",
-    # The smoke test, the manifest's second tile.
-    [Parameter(Mandatory = $true)] [string]$Diagnostics
+    [string]$Variant = "base"
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,7 +29,6 @@ New-Item -ItemType Directory -Force $layout | Out-Null
 
 Get-ChildItem $BuildDir -File | Where-Object { $_.Extension -in ".exe", ".dll" } |
     Copy-Item -Destination $layout
-Copy-Item $Diagnostics (Join-Path $layout "smoketest.exe")
 
 # Never the desktop C++ runtime: inside a package it stops the app from
 # starting on the console. Built against the app runtime, nothing to copy.

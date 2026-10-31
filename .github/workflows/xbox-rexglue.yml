@@ -11,7 +11,6 @@ on:
     paths:
       - "xbox/rexglue/**"
       - "xbox/game/**"
-      - "xbox/smoketest/**"
       - "packaging/xbox/**"
       - "src/**"
       - "CMakeLists.txt"
@@ -368,26 +367,11 @@ jobs:
               dumpbin /dependents $_.FullName | Select-String -Pattern "\.dll" | ForEach-Object { "   " + $_.Line.Trim() }
             }
 
-      # The smoke test, for the package's diagnostics tile. Built as the
-      # standalone one is, which is known to run on the console.
-      - name: Diagnostics
-        # clang-cl, which takes /arch rather than -march; the smoke test
-        # is fine built for any x64.
-        env:
-          CFLAGS: ""
-          CXXFLAGS: ""
-        run: |
-          cmake -S xbox/smoketest -B out/build/diagnostics -G Ninja -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_CXX_COMPILER=clang-cl
-          if ($LASTEXITCODE -ne 0) { throw "configure failed" }
-          cmake --build out/build/diagnostics
-          if ($LASTEXITCODE -ne 0) { throw "build failed" }
-
       - name: Package
         run: |
           foreach ($variant in "base", "2020s", "Legends") {
             ./xbox/game/package.ps1 -BuildDir out/build/game-uwp -Out out/appx -Variant $variant `
-              -Version "1.0.${{ github.run_number }}.0" -Diagnostics out/build/diagnostics/smoketest.exe
+              -Version "1.0.${{ github.run_number }}.0"
           }
 
       - name: Linker maps
