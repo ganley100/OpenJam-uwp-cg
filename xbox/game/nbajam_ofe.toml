@@ -6,6 +6,6 @@
 # this back to "debug" to bring something new up on the console.
 log_level = "warning"
 
-# An even 30 frames a second on the console (src/window_title.cpp); 0 for
-# no cap.
-frame_rate_limit = 30
+# No cap on the frame rate (src/window_title.cpp). The game's pace is tied
+# to its frame rate: held to 30 it played at half speed on the console.
+frame_rate_limit = 0

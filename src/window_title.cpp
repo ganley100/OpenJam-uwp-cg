@@ -81,9 +81,9 @@ class FrameRateTitle : public rex::ui::ImGuiDialog {
 }  // namespace
 
 // A cap on the game's own frame rate: the pad poll that counts a frame
-// holds the guest there until the frame's share of a second has passed. The
-// Xbox build sets it to 30 (xbox/game/nbajam_ofe.toml), for an even pace on
-// the console's CPU rather than one that swings with how busy the court is.
+// holds the guest there until the frame's share of a second has passed. Off
+// by default: the game's pace is tied to its frame rate, so a cap below the
+// 60 it runs at slows the game itself down.
 REXCVAR_DEFINE_INT32(frame_rate_limit, 0, "Game",
                      "Cap the game's frame rate, in frames a second; 0 for no cap");
 
