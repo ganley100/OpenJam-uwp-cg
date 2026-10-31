@@ -25,6 +25,7 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -38,6 +39,12 @@
 #endif
 
 #include <rex/cvar.h>
+
+#if NBAJAM_UWP
+#include <fstream>
+
+#include "uwp_platform.h"
+#endif
 
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/imgui_drawer.h>
@@ -76,6 +83,9 @@ class FrameRateTitle : public rex::ui::ImGuiDialog {
     const uint64_t frames = g_guest_frames.load(std::memory_order_relaxed);
     const double fps = double(frames - last_frames_) / double(since_);
     fps_ = fps;
+#if NBAJAM_UWP
+    Record(fps);
+#endif
     last_frames_ = frames;
     since_ = 0.0f;
     char text[128];
@@ -84,6 +94,37 @@ class FrameRateTitle : public rex::ui::ImGuiDialog {
   }
 
  private:
+#if NBAJAM_UWP
+  // fps.txt in LocalState: every five seconds, the average rate and the
+  // lowest half-second in them, so a session can be read afterwards from
+  // Device Portal. Started afresh each launch.
+  void Record(double fps) {
+    if (!log_.is_open() && !tried_) {
+      tried_ = true;
+      const auto local = NbaUwpLocalState();
+      if (!local.empty()) {
+        log_.open(local / "fps.txt", std::ios::trunc);
+        log_ << "seconds  average  lowest   (the game's frames a second)\n";
+      }
+    }
+    if (!log_.is_open()) return;
+    sum_ += fps;
+    lowest_ = samples_ == 0 ? fps : std::min(lowest_, fps);
+    if (++samples_ < 10) return;   // ten half-seconds
+    elapsed_ += 5;
+    char line[64];
+    std::snprintf(line, sizeof(line), "%7d  %7.1f  %6.1f\n", elapsed_, sum_ / samples_, lowest_);
+    log_ << line;
+    log_.flush();
+    sum_ = 0.0;
+    samples_ = 0;
+  }
+
+  std::ofstream log_;
+  bool tried_ = false;
+  double sum_ = 0.0, lowest_ = 0.0;
+  int samples_ = 0, elapsed_ = 0;
+#endif
   double fps_ = 0.0;
   rex::ui::Window* window_ = nullptr;
   uint64_t last_frames_ = 0;
