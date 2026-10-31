@@ -17,6 +17,7 @@
 #include "watchdog.h"
 #include "window_title.h"
 #if NBAJAM_UWP
+#include "thread_load.h"
 #include "uwp_platform.h"
 #endif
 #if NBAJAM_IOS
@@ -205,6 +206,10 @@ class NbajamOfeApp : public rex::ReXApp {
     // it the console left unmapped. See src/null_page.cpp for why this port
     // maps it.
     NbaMapNullPage();
+#if NBAJAM_UWP
+    // fps.txt says which threads are busiest; see src/thread_load.cpp.
+    NbaThreadLoadUse(runtime());
+#endif
     // A game that stops dead says nothing about why on its own.
     NbaStartWatchdog();
     // The chooser reads the controller itself and needs to be able to hold

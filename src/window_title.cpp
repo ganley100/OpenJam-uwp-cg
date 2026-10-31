@@ -43,6 +43,7 @@
 #if NBAJAM_UWP
 #include <fstream>
 
+#include "thread_load.h"
 #include "uwp_platform.h"
 
 // Frames the game has handed over to be shown (xbox/rexglue patch 0012).
@@ -135,6 +136,9 @@ class FrameRateTitle : public rex::ui::ImGuiDialog {
                   elapsed_, sum_ / samples_, lowest_, drawn_sum_ / samples_, drawn_lowest_,
                   screen_sum_ / samples_, screen_lowest_);
     log_ << line;
+    // Where the time went, for the slow stretches.
+    const std::string load = NbaThreadLoad();
+    if (!load.empty()) log_ << "         busiest: " << load << "\n";
     log_.flush();
     sum_ = screen_sum_ = drawn_sum_ = 0.0;
     samples_ = 0;
