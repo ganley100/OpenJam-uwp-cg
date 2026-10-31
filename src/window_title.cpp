@@ -44,6 +44,9 @@
 #include <fstream>
 
 #include "uwp_platform.h"
+
+// Frames the game has handed over to be shown (xbox/rexglue patch 0012).
+extern "C" uint64_t OpenJamGuestSwaps();
 #endif
 
 #include <rex/ui/imgui_dialog.h>
@@ -66,15 +69,21 @@ class FrameRateTitle : public rex::ui::ImGuiDialog {
 
  protected:
   void OnDraw(ImGuiIO& io) override {
+    // This runs once for every frame presented to the screen, so counting
+    // its calls gives the screen's rate - which can differ from the game's:
+    // a game may update at 60 and draw every other one.
+    ++draws_;
 #if NBAJAM_UWP
-    // A console shows no window title, so the rate goes in the corner.
-    char corner[32];
-    std::snprintf(corner, sizeof(corner), "%.0f fps", fps_);
+    // A console shows no window title, so the rates go in the corner.
+    char corner[64];
+    std::snprintf(corner, sizeof(corner), "game %.0f  drawn %.0f  screen %.0f", fps_, drawn_fps_,
+                  screen_fps_);
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const ImVec2 size = ImGui::CalcTextSize(corner);
     dl->AddRectFilled(ImVec2(16, 16), ImVec2(28 + size.x, 24 + size.y), IM_COL32(0, 0, 0, 140), 4);
-    dl->AddText(ImVec2(22, 20), fps_ >= 55 ? IM_COL32(120, 255, 120, 255)
-                                           : IM_COL32(255, 200, 80, 255), corner);
+    dl->AddText(ImVec2(22, 20), drawn_fps_ >= 55 ? IM_COL32(120, 255, 120, 255)
+                                                 : IM_COL32(255, 200, 80, 255),
+                corner);
 #endif
     since_ += io.DeltaTime;
     if (since_ < kRewriteEvery) {
@@ -83,8 +92,13 @@ class FrameRateTitle : public rex::ui::ImGuiDialog {
     const uint64_t frames = g_guest_frames.load(std::memory_order_relaxed);
     const double fps = double(frames - last_frames_) / double(since_);
     fps_ = fps;
+    screen_fps_ = double(draws_) / double(since_);
+    draws_ = 0;
 #if NBAJAM_UWP
-    Record(fps);
+    const uint64_t swaps = OpenJamGuestSwaps();
+    drawn_fps_ = double(swaps - last_swaps_) / double(since_);
+    last_swaps_ = swaps;
+    Record(fps, drawn_fps_, screen_fps_);
 #endif
     last_frames_ = frames;
     since_ = 0.0f;
@@ -98,34 +112,43 @@ class FrameRateTitle : public rex::ui::ImGuiDialog {
   // fps.txt in LocalState: every five seconds, the average rate and the
   // lowest half-second in them, so a session can be read afterwards from
   // Device Portal. Started afresh each launch.
-  void Record(double fps) {
+  void Record(double fps, double drawn, double screen) {
     if (!log_.is_open() && !tried_) {
       tried_ = true;
       const auto local = NbaUwpLocalState();
       if (!local.empty()) {
         log_.open(local / "fps.txt", std::ios::trunc);
-        log_ << "seconds  average  lowest   (the game's frames a second)\n";
+        log_ << "seconds  game avg  game low  drawn avg  drawn low  screen avg  screen low\n";
       }
     }
     if (!log_.is_open()) return;
     sum_ += fps;
     lowest_ = samples_ == 0 ? fps : std::min(lowest_, fps);
+    screen_sum_ += screen;
+    drawn_sum_ += drawn;
+    drawn_lowest_ = samples_ == 0 ? drawn : std::min(drawn_lowest_, drawn);
+    screen_lowest_ = samples_ == 0 ? screen : std::min(screen_lowest_, screen);
     if (++samples_ < 10) return;   // ten half-seconds
     elapsed_ += 5;
-    char line[64];
-    std::snprintf(line, sizeof(line), "%7d  %7.1f  %6.1f\n", elapsed_, sum_ / samples_, lowest_);
+    char line[128];
+    std::snprintf(line, sizeof(line), "%7d  %8.1f  %8.1f  %9.1f  %9.1f  %10.1f  %10.1f\n",
+                  elapsed_, sum_ / samples_, lowest_, drawn_sum_ / samples_, drawn_lowest_,
+                  screen_sum_ / samples_, screen_lowest_);
     log_ << line;
     log_.flush();
-    sum_ = 0.0;
+    sum_ = screen_sum_ = drawn_sum_ = 0.0;
     samples_ = 0;
   }
 
   std::ofstream log_;
   bool tried_ = false;
-  double sum_ = 0.0, lowest_ = 0.0;
+  double sum_ = 0.0, lowest_ = 0.0, screen_sum_ = 0.0, screen_lowest_ = 0.0;
+  double drawn_sum_ = 0.0, drawn_lowest_ = 0.0;
   int samples_ = 0, elapsed_ = 0;
 #endif
-  double fps_ = 0.0;
+  double fps_ = 0.0, screen_fps_ = 0.0, drawn_fps_ = 0.0;
+  uint64_t last_swaps_ = 0;
+  uint64_t draws_ = 0;
   rex::ui::Window* window_ = nullptr;
   uint64_t last_frames_ = 0;
   float since_ = kRewriteEvery;   // so the first frame writes it

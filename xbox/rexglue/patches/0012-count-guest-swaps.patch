@@ -1,0 +1,27 @@
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_video.cpp b/src/kernel/xboxkrnl/xboxkrnl_video.cpp
+index 1254710..96f7f4a 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_video.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_video.cpp
+@@ -85,6 +85,14 @@ void WarnNoGpuEmulation(const char* export_name, std::atomic<bool>& warned) {
+ }
+ }  // namespace
+ 
++// OpenJam: how many frames the guest has handed over to be shown, for a
++// frame rate counter in the host app; its own count of game updates can say
++// 60 while the game draws at 30.
++static std::atomic<uint64_t> g_openjam_guest_swaps{0};
++extern "C" uint64_t OpenJamGuestSwaps() {
++  return g_openjam_guest_swaps.load(std::memory_order_relaxed);
++}
++
+ namespace rex::kernel::xboxkrnl {
+ using namespace rex::system;
+ 
+@@ -445,6 +453,7 @@ void VdSwap_entry(mapped_void buffer_ptr,      // ptr into primary ringbuffer
+                   mapped_u32 frontbuffer_ptr,  // ptr to frontbuffer address
+                   mapped_u32 texture_format_ptr, mapped_u32 color_space_ptr, mapped_u32 width,
+                   mapped_u32 height) {
++  g_openjam_guest_swaps.fetch_add(1, std::memory_order_relaxed);
+   // All of these parameters are REQUIRED.
+   assert(buffer_ptr);
+   assert(fetch_ptr);
