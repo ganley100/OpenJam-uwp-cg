@@ -1,4 +1,7 @@
 # Runtime settings shipped beside the Xbox build's executable, where ReXApp
-# looks for <name>.toml. Debug logging while the port is being brought up on
-# the console: the log in LocalState\logs is the only window into it.
-log_level = "debug"
+# looks for <name>.toml.
+#
+# Warnings and errors only: debug logging wrote some 350 lines a second to
+# the console's drive, most of them the audio chip's register writes. Set
+# this back to "debug" to bring something new up on the console.
+log_level = "warning"

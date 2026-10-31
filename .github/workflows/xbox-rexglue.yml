@@ -169,6 +169,12 @@ jobs:
   # imports, to check against what the smoke test found on the console.
   uwp:
     runs-on: windows-latest
+    # Every Xbox One - S and X included - runs AMD's Jaguar cores, so the SDK
+    # and the game are compiled for exactly that: AVX, F16C, BMI1, MOVBE and
+    # Jaguar's scheduling. CMake takes these into a fresh build's flags.
+    env:
+      CFLAGS: -march=btver2
+      CXXFLAGS: -march=btver2
     timeout-minutes: 360
     defaults:
       run:
@@ -365,6 +371,11 @@ jobs:
       # The smoke test, for the package's diagnostics tile. Built as the
       # standalone one is, which is known to run on the console.
       - name: Diagnostics
+        # clang-cl, which takes /arch rather than -march; the smoke test
+        # is fine built for any x64.
+        env:
+          CFLAGS: ""
+          CXXFLAGS: ""
         run: |
           cmake -S xbox/smoketest -B out/build/diagnostics -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_CXX_COMPILER=clang-cl
