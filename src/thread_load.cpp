@@ -19,6 +19,13 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#if WINAPI_FAMILY == WINAPI_FAMILY_APP
+extern "C" __declspec(dllimport) BOOL WINAPI GetModuleHandleExW(DWORD flags, LPCWSTR name,
+                                                                HMODULE* module);
+#endif
+#ifndef GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT
+#define GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT 0x00000002
+#endif
 #endif
 
 #include <rex/runtime.h>
@@ -102,6 +109,30 @@ std::string NbaThreadLoad() {
         out += part;
       }
       last_process = total;
+    }
+  }
+#endif
+#if defined(_WIN32)
+  // How much of the time the GPU translation thread sat waiting for the host
+  // GPU (xbox/rexglue patch 0015, in the GPU plugin). Near 100% means the
+  // GPU is what holds frames back.
+  {
+    using WaitFn = uint64_t (*)();
+    static WaitFn gpu_wait = [] {
+      HMODULE plugin = nullptr;
+      GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, L"rexgpu-xenos.dll",
+                         &plugin);
+      return plugin ? reinterpret_cast<WaitFn>(GetProcAddress(plugin, "OpenJamGpuWaitNs"))
+                    : nullptr;
+    }();
+    static uint64_t last_wait = 0;
+    if (gpu_wait && wall > 0) {
+      const uint64_t waited = gpu_wait();
+      char part[48];
+      std::snprintf(part, sizeof(part), "waiting on GPU %.0f%%; ",
+                    double(waited - last_wait) / (wall * 100.0) * 100.0);
+      out += part;
+      last_wait = waited;
     }
   }
 #endif

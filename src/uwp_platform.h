@@ -28,3 +28,7 @@ std::string NbaUwpVariant();
 // With no game found, say what to do on screen and end the app, rather than
 // leaving the player at a splash screen that closes. Does not return.
 [[noreturn]] void NbaUwpNoGame();
+
+// Keeps B for the game. On the console B is also the system's Back, and an
+// app that leaves Back unhandled is closed back to the home screen.
+void NbaUwpKeepBackButton();

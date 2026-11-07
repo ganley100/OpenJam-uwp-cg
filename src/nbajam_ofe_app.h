@@ -55,6 +55,7 @@ class NbajamOfeApp : public rex::ReXApp {
 #if NBAJAM_UWP
     // Found or unpacked now, before anything is set up, so a console with no
     // game on it gets told so instead of a splash screen that closes.
+    NbaUwpKeepBackButton();
     if (NbaUwpGameRoot().empty()) {
       NbaUwpNoGame();
     }

@@ -409,6 +409,16 @@ std::filesystem::path NbaUwpGameRoot() {
   return decided_root;
 }
 
+void NbaUwpKeepBackButton() {
+  try {
+    winrt::Windows::UI::Core::SystemNavigationManager::GetForCurrentView().BackRequested(
+        [](auto&&, winrt::Windows::UI::Core::BackRequestedEventArgs const& args) {
+          args.Handled(true);
+        });
+  } catch (const winrt::hresult_error&) {
+  }
+}
+
 void NbaUwpNoGame() {
   using namespace winrt::Windows::UI;
   const std::wstring local = NbaUwpLocalState().wstring();
