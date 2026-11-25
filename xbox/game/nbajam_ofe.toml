@@ -10,9 +10,11 @@ log_level = "warning"
 # below 60 plays it in slow motion.
 frame_rate_limit = 0
 
-# How frames reach the TV. No vsync, as before 1.0.46 (present_interval 0;
-# 1 or more waits for that many display refreshes), and never more than 30
-# frames a second (present_fps_limit; 0 for no limit). The game's own pace
-# is unaffected.
+# How frames reach the TV: no vsync, as before 1.0.46, and no limit. The
+# app draws no dialog of its own on the console any more, so the screen is
+# repainted only when the game has a new frame; it was the repaints of the
+# same frame, at 60 a second, that held a match to 15. present_interval 1
+# or more waits for that many display refreshes; present_fps_limit caps the
+# frames shown a second (it was 30, and a match then drew a steady 30).
 present_interval = 0
-present_fps_limit = 30
+present_fps_limit = 0

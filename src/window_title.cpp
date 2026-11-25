@@ -63,6 +63,52 @@ constexpr float kRewriteEvery = 0.5f;   // seconds
 // Written from a guest thread, read from the UI thread.
 std::atomic<uint64_t> g_guest_frames{0};
 
+#if NBAJAM_UWP
+// fps.txt in LocalState: every five seconds, the average rates and the
+// lowest half-second in them, so a session can be read afterwards from
+// Device Portal. Started afresh each launch.
+class FpsFile {
+ public:
+  void Record(double fps, double drawn, double screen) {
+    if (!log_.is_open() && !tried_) {
+      tried_ = true;
+      const auto local = NbaUwpLocalState();
+      if (!local.empty()) {
+        log_.open(local / "fps.txt", std::ios::trunc);
+        log_ << "seconds  game avg  game low  drawn avg  drawn low  screen avg  screen low\n";
+      }
+    }
+    if (!log_.is_open()) return;
+    sum_ += fps;
+    lowest_ = samples_ == 0 ? fps : std::min(lowest_, fps);
+    screen_sum_ += screen;
+    drawn_sum_ += drawn;
+    drawn_lowest_ = samples_ == 0 ? drawn : std::min(drawn_lowest_, drawn);
+    screen_lowest_ = samples_ == 0 ? screen : std::min(screen_lowest_, screen);
+    if (++samples_ < 10) return;   // ten half-seconds
+    elapsed_ += 5;
+    char line[128];
+    std::snprintf(line, sizeof(line), "%7d  %8.1f  %8.1f  %9.1f  %9.1f  %10.1f  %10.1f\n",
+                  elapsed_, sum_ / samples_, lowest_, drawn_sum_ / samples_, drawn_lowest_,
+                  screen_sum_ / samples_, screen_lowest_);
+    log_ << line;
+    // Where the time went, for the slow stretches.
+    const std::string load = NbaThreadLoad();
+    if (!load.empty()) log_ << "         busiest: " << load << "\n";
+    log_.flush();
+    sum_ = screen_sum_ = drawn_sum_ = 0.0;
+    samples_ = 0;
+  }
+
+ private:
+  std::ofstream log_;
+  bool tried_ = false;
+  double sum_ = 0.0, lowest_ = 0.0, screen_sum_ = 0.0, screen_lowest_ = 0.0;
+  double drawn_sum_ = 0.0, drawn_lowest_ = 0.0;
+  int samples_ = 0, elapsed_ = 0;
+};
+#endif
+
 class FrameRateTitle : public rex::ui::ImGuiDialog {
  public:
   FrameRateTitle(rex::ui::ImGuiDrawer* drawer, rex::ui::Window* window)
@@ -99,7 +145,7 @@ class FrameRateTitle : public rex::ui::ImGuiDialog {
     const uint64_t swaps = OpenJamGuestSwaps();
     drawn_fps_ = double(swaps - last_swaps_) / double(since_);
     last_swaps_ = swaps;
-    Record(fps, drawn_fps_, screen_fps_);
+    log_.Record(fps, drawn_fps_, screen_fps_);
 #endif
     last_frames_ = frames;
     since_ = 0.0f;
@@ -110,45 +156,7 @@ class FrameRateTitle : public rex::ui::ImGuiDialog {
 
  private:
 #if NBAJAM_UWP
-  // fps.txt in LocalState: every five seconds, the average rate and the
-  // lowest half-second in them, so a session can be read afterwards from
-  // Device Portal. Started afresh each launch.
-  void Record(double fps, double drawn, double screen) {
-    if (!log_.is_open() && !tried_) {
-      tried_ = true;
-      const auto local = NbaUwpLocalState();
-      if (!local.empty()) {
-        log_.open(local / "fps.txt", std::ios::trunc);
-        log_ << "seconds  game avg  game low  drawn avg  drawn low  screen avg  screen low\n";
-      }
-    }
-    if (!log_.is_open()) return;
-    sum_ += fps;
-    lowest_ = samples_ == 0 ? fps : std::min(lowest_, fps);
-    screen_sum_ += screen;
-    drawn_sum_ += drawn;
-    drawn_lowest_ = samples_ == 0 ? drawn : std::min(drawn_lowest_, drawn);
-    screen_lowest_ = samples_ == 0 ? screen : std::min(screen_lowest_, screen);
-    if (++samples_ < 10) return;   // ten half-seconds
-    elapsed_ += 5;
-    char line[128];
-    std::snprintf(line, sizeof(line), "%7d  %8.1f  %8.1f  %9.1f  %9.1f  %10.1f  %10.1f\n",
-                  elapsed_, sum_ / samples_, lowest_, drawn_sum_ / samples_, drawn_lowest_,
-                  screen_sum_ / samples_, screen_lowest_);
-    log_ << line;
-    // Where the time went, for the slow stretches.
-    const std::string load = NbaThreadLoad();
-    if (!load.empty()) log_ << "         busiest: " << load << "\n";
-    log_.flush();
-    sum_ = screen_sum_ = drawn_sum_ = 0.0;
-    samples_ = 0;
-  }
-
-  std::ofstream log_;
-  bool tried_ = false;
-  double sum_ = 0.0, lowest_ = 0.0, screen_sum_ = 0.0, screen_lowest_ = 0.0;
-  double drawn_sum_ = 0.0, drawn_lowest_ = 0.0;
-  int samples_ = 0, elapsed_ = 0;
+  FpsFile log_;
 #endif
   double fps_ = 0.0, screen_fps_ = 0.0, drawn_fps_ = 0.0;
   uint64_t last_swaps_ = 0;
@@ -222,8 +230,54 @@ unsigned long long NbaGuestFrameCount() {
 
 const std::string& NbaWindowTitle() { return kTitle; }
 
+#if NBAJAM_UWP
+namespace {
+
+// On the console the rates are sampled on a thread of their own instead of
+// by a dialog. Any dialog at all keeps the presenter repainting the screen
+// at full rate from the UI thread, new frame or not, and those repaints
+// cost the game half its frames in a match: with the screen held to 30,
+// a match drew a steady 30 where it had drawn 15. With no dialog the
+// presenter shows each new frame once, as it arrives. fps.txt keeps its
+// columns; "screen" is no longer measured there and reads as drawn.
+void SampleOnThread() {
+  std::thread([] {
+    FpsFile log;
+    uint64_t last_frames = g_guest_frames.load(std::memory_order_relaxed);
+    uint64_t last_swaps = OpenJamGuestSwaps();
+    auto last = std::chrono::steady_clock::now();
+    for (;;) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      const auto now = std::chrono::steady_clock::now();
+      const double since = std::chrono::duration<double>(now - last).count();
+      last = now;
+      const uint64_t frames = g_guest_frames.load(std::memory_order_relaxed);
+      const uint64_t swaps = OpenJamGuestSwaps();
+      const double fps = double(frames - last_frames) / since;
+      const double drawn = double(swaps - last_swaps) / since;
+      last_frames = frames;
+      last_swaps = swaps;
+      log.Record(fps, drawn, drawn);
+    }
+  }).detach();
+}
+
+}  // namespace
+#endif
+
 void NbaTrackFrameRateInTitle(rex::ui::ImGuiDrawer* drawer,
                               rex::ui::Window* window) {
+#if NBAJAM_UWP
+  // No dialog on the console; see SampleOnThread.
+  (void)drawer;
+  (void)window;
+  static bool started = false;
+  if (!started) {
+    started = true;
+    SampleOnThread();
+  }
+  return;
+#endif
   if (!drawer || !window) {
     return;
   }
