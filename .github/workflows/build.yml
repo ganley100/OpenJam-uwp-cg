@@ -21,7 +21,9 @@ env:
 
 jobs:
   build:
-    runs-on: windows-latest
+    # Pinned: windows-latest moved to Visual Studio 2026, whose C++ library
+    # refuses the runner's Clang ("expected Clang 22 or newer").
+    runs-on: windows-2022
     timeout-minutes: 300
     defaults:
       run:

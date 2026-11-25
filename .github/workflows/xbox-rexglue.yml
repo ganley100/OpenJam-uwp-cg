@@ -31,7 +31,9 @@ jobs:
   # since it is a long one and the PC build rarely needs re-proving.
   desktop:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: windows-latest
+    # Pinned: windows-latest moved to Visual Studio 2026, whose C++ library
+    # refuses the runner's Clang ("expected Clang 22 or newer").
+    runs-on: windows-2022
     timeout-minutes: 360
     defaults:
       run:
@@ -167,7 +169,9 @@ jobs:
   # one run reports all of them, then lists which Windows DLLs the runtime
   # imports, to check against what the smoke test found on the console.
   uwp:
-    runs-on: windows-latest
+    # Pinned: windows-latest moved to Visual Studio 2026, whose C++ library
+    # refuses the runner's Clang ("expected Clang 22 or newer").
+    runs-on: windows-2022
     # Every Xbox One - S and X included - runs AMD's Jaguar cores, so the SDK
     # and the game are compiled for exactly that: AVX, F16C, BMI1, MOVBE and
     # Jaguar's scheduling. CMake takes these into a fresh build's flags.
