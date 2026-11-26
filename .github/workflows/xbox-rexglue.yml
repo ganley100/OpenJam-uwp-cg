@@ -375,7 +375,7 @@ jobs:
         run: |
           foreach ($variant in "base", "2020s", "Legends") {
             ./xbox/game/package.ps1 -BuildDir out/build/game-uwp -Out out/appx -Variant $variant `
-              -Version "1.0.${{ github.run_number }}.0"
+              -Version "1.1.${{ github.run_number }}.0"
           }
 
       - name: Linker maps

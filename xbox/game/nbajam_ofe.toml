@@ -18,3 +18,10 @@ frame_rate_limit = 0
 # frames shown a second (it was 30, and a match then drew a steady 30).
 present_interval = 0
 present_fps_limit = 0
+
+# Saves: progress does not survive quitting the game on the console. Every
+# kernel call the game makes - its profile settings, its save content, the
+# storage device it is offered - goes into the log in full until that is
+# fixed. The rest of the log stays at warnings.
+[log.levels]
+krnl = "debug"
