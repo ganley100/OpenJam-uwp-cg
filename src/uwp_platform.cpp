@@ -5,16 +5,11 @@
 //
 // On a PC, choosing a mod relaunches this executable against that mod's game
 // root, and the watchdog's way out of a stopped game is the same relaunch.
-// A UWP app cannot do either: it may not start a process, its own included,
-// and the console gives each app one instance. So on the Xbox each game - the
-// base game and each mod - is packaged as an app of its own, with that game's
-// root as the package. Switching mod is switching app, from the console's
-// own menu.
-//
-// What is left here is the same interface with nothing to swap to. There is
-// no mods.list in a package, so the chooser finds an empty list and does
-// nothing when opened.
-//
+// A UWP app cannot start a process, its own included. What it can do is ask
+// the system to restart it: so in NBA JAM UWP the main menu's mod list
+// (src/mod_picker.cpp) lists the plain game and each mod in its mods folder,
+// and choosing one writes the choice down and restarts the app into it.
+
 // The watchdog walks other threads' stacks with DbgHelp and offers a restart,
 // and neither is available to an app. A game that stops on the console is
 // closed from the console's own menu, which is what that menu is for.
@@ -389,51 +384,15 @@ fs::path PrepareGame(const fs::path& work, const fs::path& shared, const fs::pat
 //
 // Its folder (NBA JAM UWP, in Development Files or on a USB drive) holds the
 // game, as any app's does, and a mods\ folder with one folder per mod - its
-// PS3 .pkg file(s), or the mod already opened out. At start a dialog offers
-// the plain game and each mod; the one picked is made ready in its own
-// folder, games\<mod>, and keeps its own saves. To change, quit and start
-// the app again. The dialog is gone before the game starts, so it costs no
-// frames.
+// PS3 .pkg file(s), or the mod already opened out. The app plays the one
+// last chosen (the plain game the first time); each mod is made ready in its
+// own folder, games\<mod>, and keeps its own saves. Choosing is done from the
+// main menu's mod list (src/mod_picker.cpp), which writes the choice and
+// restarts the app into it.
 
 std::string g_uwp_choice;
-
-// Asks which game to play, one at a time: Play starts the one shown, Next
-// (or B) shows the next. Returns its index.
-size_t ChooseGame(const std::vector<fs::path>& names, size_t at) {
-  using namespace winrt::Windows::UI;
-  if (names.size() < 2) return 0;
-  for (;;) {
-    const std::wstring text = L"Which game?\n\n" + names[at].wstring() + L"\n\n(" +
-                              std::to_wstring(at + 1) + L" of " +
-                              std::to_wstring(names.size()) +
-                              L")\n\nPlay starts it. Next shows the next one.";
-    int picked = 1;
-    bool done = false;
-    try {
-      Popups::MessageDialog dialog(winrt::hstring(text), L"NBA JAM UWP");
-      dialog.Commands().Append(Popups::UICommand(L"Play", nullptr, winrt::box_value(0)));
-      dialog.Commands().Append(Popups::UICommand(L"Next", nullptr, winrt::box_value(1)));
-      dialog.DefaultCommandIndex(0);
-      dialog.CancelCommandIndex(1);
-      dialog.ShowAsync().Completed([&picked, &done](auto const& op, auto&&) {
-        try {
-          picked = winrt::unbox_value<int>(op.GetResults().Id());
-        } catch (...) {
-        }
-        done = true;
-      });
-      auto dispatcher = Core::CoreWindow::GetForCurrentThread().Dispatcher();
-      while (!done) {
-        dispatcher.ProcessEvents(Core::CoreProcessEventsOption::ProcessOneIfPresent);
-        Sleep(16);
-      }
-    } catch (...) {
-      return at;
-    }
-    if (picked == 0) return at;
-    at = (at + 1) % names.size();
-  }
-}
+fs::path g_uwp_own;
+std::vector<std::string> g_uwp_names;
 
 fs::path PrepareChosen(const fs::path& own, const fs::path& local, std::ostream& status) {
   std::error_code ec;
@@ -452,14 +411,16 @@ fs::path PrepareChosen(const fs::path& own, const fs::path& local, std::ostream&
   names.insert(names.end(), mods.begin(), mods.end());
   status << names.size() - 1 << " mod(s) in " << (own / "mods").string() << "\n";
 
-  // The last one played comes up first.
+  // The last one chosen, if it is still there; the plain game otherwise.
   std::string last = ReadText(local / "uwp_choice.txt");
   while (!last.empty() && (last.back() == '\n' || last.back() == '\r')) last.pop_back();
-  size_t at = 0;
+  size_t pick = 0;
   for (size_t i = 0; i < names.size(); ++i) {
-    if (names[i].string() == last) at = i;
+    if (names[i].string() == last) pick = i;
   }
-  const size_t pick = ChooseGame(names, at);
+  g_uwp_own = own;
+  g_uwp_names.clear();
+  for (const fs::path& n : names) g_uwp_names.push_back(n.string());
   g_uwp_choice = names[pick].string();
   std::ofstream(local / "uwp_choice.txt") << g_uwp_choice << "\n";
   status << "playing: " << g_uwp_choice << "\n";
@@ -627,11 +588,44 @@ void NbaUwpNoGame() {
 bool NbaModList(std::vector<NbaMod>* mods, size_t* active) {
   mods->clear();
   *active = 0;
-  return false;
+  if (g_uwp_names.empty()) return false;
+  for (size_t i = 0; i < g_uwp_names.size(); ++i) {
+    NbaMod m;
+    m.id = g_uwp_names[i];
+    m.name = g_uwp_names[i];
+    m.path = i == 0 ? g_uwp_own.string() : (g_uwp_own / "mods" / g_uwp_names[i]).string();
+    if (m.id == g_uwp_choice) *active = i;
+    mods->push_back(std::move(m));
+  }
+  return true;
 }
 
+// An app cannot start another process, but it can ask to be started again:
+// the choice is written where the next start reads it, and the app restarts
+// into it.
 void NbaModSwapTo(const NbaMod& mod) {
-  REXLOG_INFO("mod swap: '{}' is a separate app on this console", mod.name);
+  if (mod.id == g_uwp_choice) return;
+  const fs::path local = NbaUwpLocalState();
+  if (local.empty()) return;
+  {
+    std::ofstream out(local / "uwp_choice.txt", std::ios::trunc);
+    out << mod.id << "\n";
+  }
+  REXLOG_INFO("mod swap: restarting into '{}'", mod.name);
+  try {
+    static winrt::Windows::Foundation::IAsyncOperation<
+        winrt::Windows::ApplicationModel::Core::AppRestartFailureReason> op{nullptr};
+    op = winrt::Windows::ApplicationModel::Core::CoreApplication::RequestRestartAsync(L"");
+    op.Completed([](auto const& done, auto&&) {
+      try {
+        REXLOG_WARN("mod swap: restart refused ({}); close and start the app again",
+                    int(done.GetResults()));
+      } catch (...) {
+      }
+    });
+  } catch (...) {
+    REXLOG_WARN("mod swap: restart not available; close and start the app again");
+  }
 }
 
 void NbaModRestart() {

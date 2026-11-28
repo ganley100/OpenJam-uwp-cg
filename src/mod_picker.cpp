@@ -99,8 +99,11 @@
 #include <atomic>
 #include <cctype>
 #include <cfloat>
+#include <chrono>
 #include <filesystem>
+#include <functional>
 #include <mutex>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -256,6 +259,13 @@ int g_chosen = 0;              // the one the cursor is on
 bool g_listed = false;         // mods.list has been read
 std::atomic<bool> g_open{false};
 
+// On the console the list is only there while the main menu is: any dialog
+// keeps the screen repainted at full rate, which costs a match frames
+// (src/window_title.cpp). So there it closes itself off the main menu and a
+// watcher puts it back when the menu comes up again. Elsewhere it stays.
+std::atomic<bool> g_on_demand{false};
+std::atomic<bool> g_alive{false};
+
 // Read the list once, the first time it is wanted. Nothing can add a mod
 // while the game is up: a new one arrives by staging the game folder again,
 // which the game is not running during.
@@ -380,7 +390,10 @@ float DPad(ImDrawList* dl, float x, float mid, float r) {
 
 class Picker : public rex::ui::ImGuiDialog {
  public:
-  explicit Picker(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
+  explicit Picker(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {
+    g_alive.store(true, std::memory_order_relaxed);
+  }
+  ~Picker() override { g_alive.store(false, std::memory_order_relaxed); }
 
  protected:
   void OnDraw(ImGuiIO& io) override {
@@ -390,6 +403,7 @@ class Picker : public rex::ui::ImGuiDialog {
     // changes.
     if (!NbaFrontEndOnMainMenu()) {
       if (g_open.load(std::memory_order_relaxed)) Shut();
+      if (g_on_demand.load(std::memory_order_relaxed)) Close();
       return;
     }
     Pad();
@@ -754,6 +768,26 @@ void NbaModPickerCreate(rex::ui::ImGuiDrawer* drawer) {
   // A dialog adds itself to the drawer and is owned by it from then on; this
   // one is never closed, so it lives as long as the drawer does.
   new Picker(drawer);
+}
+
+void NbaModPickerCreateOnMainMenu(rex::ui::ImGuiDrawer* drawer,
+                                  std::function<void(std::function<void()>)> call_in_ui) {
+  if (!drawer || !call_in_ui) return;
+  g_on_demand.store(true, std::memory_order_relaxed);
+  std::thread([drawer, call_in_ui] {
+    for (;;) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      if (g_alive.load(std::memory_order_relaxed) || !NbaFrontEndOnMainMenu()) continue;
+      g_alive.store(true, std::memory_order_relaxed);
+      call_in_ui([drawer] {
+        if (NbaFrontEndOnMainMenu()) {
+          new Picker(drawer);
+        } else {
+          g_alive.store(false, std::memory_order_relaxed);
+        }
+      });
+    }
+  }).detach();
 }
 
 bool NbaModPickerPad(uint16_t buttons, uint8_t left_trigger) {

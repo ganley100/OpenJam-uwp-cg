@@ -256,10 +256,14 @@ class NbajamOfeApp : public rex::ReXApp {
   // why the count is taken from ImGui rather than from the game.
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
     NbaTrackFrameRateInTitle(drawer, window());
-#if !NBAJAM_UWP
-    // Not on the console: each mod is an app of its own there, so the
-    // chooser has nothing to list, and any dialog keeps the screen repainted
-    // at full rate, which costs the game frames (src/window_title.cpp).
+#if NBAJAM_UWP
+    // On the console only while the main menu is up: any dialog keeps the
+    // screen repainted at full rate, which costs a match frames
+    // (src/window_title.cpp).
+    NbaModPickerCreateOnMainMenu(drawer, [this](std::function<void()> f) {
+      app_context().CallInUIThread(std::move(f));
+    });
+#else
     NbaModPickerCreate(drawer);
 #endif
 #if NBAJAM_IOS

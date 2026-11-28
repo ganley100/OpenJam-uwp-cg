@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 
 struct ImFontAtlas;
 struct ImFont;
@@ -40,6 +41,12 @@ void NbaModPickerUseInput(rex::input::InputSystem* input);
 
 // Start drawing. Safe to call once the ImGui drawer exists.
 void NbaModPickerCreate(rex::ui::ImGuiDrawer* drawer);
+
+// The same, but only there while the main menu is: put up when it appears
+// (through `call_in_ui`, which runs a function on the UI thread) and gone off
+// it, so a match draws with no dialog at all. For the console.
+void NbaModPickerCreateOnMainMenu(rex::ui::ImGuiDrawer* drawer,
+                                  std::function<void(std::function<void()>)> call_in_ui);
 
 // The pad, as the kernel filled it in, before the game has seen it. The left
 // trigger comes separately because it is a byte in the gamepad rather than
