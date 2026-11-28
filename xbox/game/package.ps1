@@ -15,7 +15,7 @@ param(
     [string]$Version = "1.0.0.0",
     # Which app: the base game, or the mod it plays. Each installs as its
     # own app, with its own storage and saves.
-    [ValidateSet("base", "2020s", "Legends")]
+    [ValidateSet("base", "2020s", "Legends", "UWP")]
     [string]$Variant = "base"
 )
 
@@ -39,13 +39,16 @@ Copy-Item (Join-Path $here "nbajam_ofe.toml") $layout
 $meta = Join-Path $repo "metadata"
 if (Test-Path $meta) { Copy-Item -Recurse $meta (Join-Path $layout "metadata") }
 # The tiles: the mods' carry a banner with the mod's name.
-$assets = if ($Variant -eq "base") { "Assets" } else { "Assets-$Variant" }
+# NBA JAM UWP keeps the base game's tiles.
+$assets = if ($Variant -in "base", "UWP") { "Assets" } else { "Assets-$Variant" }
 Copy-Item -Recurse (Join-Path $repo "packaging\xbox\$assets") (Join-Path $layout "Assets")
 # The identity is how the app knows which it is (src/uwp_platform.cpp).
 $v = @{
     "base"    = @{ Identity = "OpenJam.NBAJamOFE";         Name = "NBA JAM: On Fire Edition";        Short = "NBA JAM";         File = "NBAJamOFE" }
     "2020s"   = @{ Identity = "OpenJam.NBAJamOFE.2020s";   Name = "NBA JAM 2020s On Fire Edition";   Short = "NBA JAM 2020s";   File = "NBAJamOFE-2020s" }
     "Legends" = @{ Identity = "OpenJam.NBAJamOFE.Legends"; Name = "NBA JAM Legends On Fire Edition"; Short = "NBA JAM Legends"; File = "NBAJamOFE-Legends" }
+    # One app, any number of mods, picked at start (src/uwp_platform.cpp).
+    "UWP"     = @{ Identity = "OpenJam.NBAJamOFE.UWP";     Name = "NBA JAM UWP";                     Short = "NBA JAM UWP";     File = "NBAJamUWP" }
 }[$Variant]
 (Get-Content (Join-Path $here "AppxManifest.xml") -Raw) `
     -replace "@VERSION@", $Version `

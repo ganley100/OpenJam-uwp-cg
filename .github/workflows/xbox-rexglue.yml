@@ -373,7 +373,7 @@ jobs:
 
       - name: Package
         run: |
-          foreach ($variant in "base", "2020s", "Legends") {
+          foreach ($variant in "base", "2020s", "Legends", "UWP") {
             ./xbox/game/package.ps1 -BuildDir out/build/game-uwp -Out out/appx -Variant $variant `
               -Version "1.1.${{ github.run_number }}.0"
           }

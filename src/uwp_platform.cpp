@@ -140,9 +140,11 @@ bool NameFits(const std::wstring& folder, const std::string& variant) {
   if (f.find(L"jam") == std::wstring::npos) return false;
   const bool is_2020 = f.find(L"2020") != std::wstring::npos;
   const bool is_legends = f.find(L"legend") != std::wstring::npos;
-  if (variant.empty()) return !is_2020 && !is_legends;
+  const bool is_uwp = f.find(L"uwp") != std::wstring::npos;
+  if (variant.empty()) return !is_2020 && !is_legends && !is_uwp;
   if (variant == "2020s") return is_2020;
   if (variant == "Legends") return is_legends;
+  if (variant == "UWP") return is_uwp;
   return false;
 }
 
@@ -244,7 +246,242 @@ int UnpackFrom(const fs::path& from, const fs::path& into, bool packs, std::stri
   return n;
 }
 
+// A mod already opened out of its packages, in `dir`: its mod\ folder, or
+// the folder itself when it holds the mod's data\ or USRDIR\ (and is not a
+// game of its own).
+fs::path OpenedMod(const fs::path& dir) {
+  std::error_code ec;
+  if (dir.empty()) return {};
+  if (fs::is_directory(dir / "mod", ec)) return dir / "mod";
+  if (!fs::exists(dir / "default.xex", ec) &&
+      (fs::is_directory(dir / "data", ec) || fs::is_directory(dir / "USRDIR", ec))) {
+    return dir;
+  }
+  return {};
+}
+
+bool HasOpenedMod(const fs::path& dir) { return !OpenedMod(dir).empty(); }
+
+// Gets a game ready to play in `work`: the game already there, or unpacked
+// into work\game from what is in `work` (or, failing that, `shared`), and
+// with the mod `variant` put on it once from `mod_dir` when variant is not
+// empty. Returns the game's root, or nothing with the reason in status.
+fs::path PrepareGame(const fs::path& work, const fs::path& shared, const fs::path& local,
+                     bool direct, const std::string& variant, const fs::path& mod_dir,
+                     std::ostream& status) {
+  std::error_code ec;
+  // The game: here already, or unpacked here.
+  std::string what;
+  const fs::path game = work / "game";
+  const fs::path marker_name = "openjam_mod.txt", base_name = "openjam_unpacked.txt";
+  // A mod applied by an earlier converter, or from other packages, is
+  // taken off by starting again from the plain game - only in the game folder
+  // this app unpacked itself, never in loose files someone put here.
+  if (!variant.empty() && fs::exists(game / base_name, ec)) {
+    const std::string had = ReadText(game / marker_name);
+    const std::vector<fs::path> p = NbaFindPs3Pkgs(mod_dir);
+    const bool f = HasOpenedMod(mod_dir);
+    if (!had.empty() && (!p.empty() || f) && had != ModSignature(p, f)) {
+      status << "the mod or the converter has changed since it was applied; starting again\n"
+                "from the plain game\n";
+      status.flush();
+      fs::remove_all(game, ec);
+    }
+  }
+  fs::path root = GameIn(work);
+  if (root.empty() && direct && variant.empty()) {
+    // The base app's earlier copy in LocalState still plays.
+    root = GameIn(local);
+  }
+  if (root.empty()) {
+    const int n = UnpackFrom(work, game, true, &what, status);
+    if (n < 0) return {};
+    if (n > 0) {
+      root = game;
+      if (what == ".ojpk") std::ofstream(game / marker_name) << "pack\n";
+      else std::ofstream(game / base_name) << what << "\n";
+    }
+  }
+  if (root.empty() && !shared.empty()) {
+    // A mod app, from the plain game's folder.
+    if (const fs::path from = GameIn(shared); !from.empty()) {
+      status << "copying the game in " << from.string() << " into " << game.string() << "\n";
+      status.flush();
+      fs::copy(from, game, fs::copy_options::recursive | fs::copy_options::overwrite_existing,
+               ec);
+      fs::remove(game / marker_name, ec);
+      if (!fs::exists(game / "default.xex", ec)) {
+        status << "copying it failed (" << ec.message() << ")\n";
+        return {};
+      }
+      std::ofstream(game / base_name) << "copied\n";
+      root = game;
+    } else {
+      const int n = UnpackFrom(shared, game, false, &what, status);
+      if (n < 0) return {};
+      if (n > 0) {
+        std::ofstream(game / base_name) << what << "\n";
+        root = game;
+      }
+    }
+  }
+  if (root.empty()) {
+    status << "No game yet. Put the game in a folder named "
+           << fs::path(FolderName(variant)).string()
+           << " in D:\\DevelopmentFiles or on a USB drive (or in this app's\n"
+              "LocalState): the Xbox Live download (the 42-character file with no\n"
+              "extension), a .iso, an .ojpk pack, or the unpacked game (default.xex\n"
+              "and data). Then start the app again.\n";
+    return {};
+  }
+  status << "game: " << root.string() << "\n";
+  if (variant.empty()) return root;
+
+  // The mod.
+  const fs::path marker = root / marker_name;
+  const std::vector<fs::path> pkgs = NbaFindPs3Pkgs(mod_dir);
+  const fs::path folder = OpenedMod(mod_dir);
+  if (pkgs.empty() && folder.empty()) {
+    if (fs::exists(root / base_name, ec) && !fs::exists(marker, ec)) {
+      status << "No " << variant << " mod yet. Put the mod's PS3 .pkg file(s) in "
+             << work.string() << ", then start the app again. The game is ready and stays.\n";
+      return {};
+    }
+    if (!fs::exists(marker, ec)) status << "mod: none given; playing the files as they are\n";
+    return root;
+  }
+  const std::string sig = ModSignature(pkgs, !folder.empty());
+  if (ReadText(marker) == sig) {
+    status << "mod: already applied\n";
+    return root;
+  }
+  fs::path opened = folder;
+  const fs::path scratch = work / "mod_ps3";
+  if (opened.empty()) {
+    fs::remove_all(scratch, ec);
+    for (const fs::path& p : pkgs) {
+      status << "opening " << p.string() << "\n";
+      status.flush();
+      if (NbaExtractPs3Pkg(p, scratch, status) < 0) {
+        status << "could not open " << p.filename().string() << "\n";
+        return {};
+      }
+    }
+    opened = scratch;
+  }
+  status << "applying the " << variant << " mod to " << root.string() << "\n";
+  status.flush();
+  const int n = NbaApplyPs3Mod(opened, root, status);
+  fs::remove_all(scratch, ec);
+  if (n <= 0) {
+    status << "the mod did not apply\n";
+    return {};
+  }
+  std::ofstream(marker, std::ios::binary) << sig;
+  status << "The mod is applied, and is applied again only when the .pkg file(s)\n"
+            "change.\n";
+  return root;
+}
+
+// ---------------------------------------------------------------------------
+// NBA JAM UWP: one app, any number of mods
+//
+// Its folder (NBA JAM UWP, in Development Files or on a USB drive) holds the
+// game, as any app's does, and a mods\ folder with one folder per mod - its
+// PS3 .pkg file(s), or the mod already opened out. At start a dialog offers
+// the plain game and each mod; the one picked is made ready in its own
+// folder, games\<mod>, and keeps its own saves. To change, quit and start
+// the app again. The dialog is gone before the game starts, so it costs no
+// frames.
+
+std::string g_uwp_choice;
+
+// Asks which game to play, one at a time: Play starts the one shown, Next
+// (or B) shows the next. Returns its index.
+size_t ChooseGame(const std::vector<fs::path>& names, size_t at) {
+  using namespace winrt::Windows::UI;
+  if (names.size() < 2) return 0;
+  for (;;) {
+    const std::wstring text = L"Which game?\n\n" + names[at].wstring() + L"\n\n(" +
+                              std::to_wstring(at + 1) + L" of " +
+                              std::to_wstring(names.size()) +
+                              L")\n\nPlay starts it. Next shows the next one.";
+    int picked = 1;
+    bool done = false;
+    try {
+      Popups::MessageDialog dialog(winrt::hstring(text), L"NBA JAM UWP");
+      dialog.Commands().Append(Popups::UICommand(L"Play", nullptr, winrt::box_value(0)));
+      dialog.Commands().Append(Popups::UICommand(L"Next", nullptr, winrt::box_value(1)));
+      dialog.DefaultCommandIndex(0);
+      dialog.CancelCommandIndex(1);
+      dialog.ShowAsync().Completed([&picked, &done](auto const& op, auto&&) {
+        try {
+          picked = winrt::unbox_value<int>(op.GetResults().Id());
+        } catch (...) {
+        }
+        done = true;
+      });
+      auto dispatcher = Core::CoreWindow::GetForCurrentThread().Dispatcher();
+      while (!done) {
+        dispatcher.ProcessEvents(Core::CoreProcessEventsOption::ProcessOneIfPresent);
+        Sleep(16);
+      }
+    } catch (...) {
+      return at;
+    }
+    if (picked == 0) return at;
+    at = (at + 1) % names.size();
+  }
+}
+
+fs::path PrepareChosen(const fs::path& own, const fs::path& local, std::ostream& status) {
+  std::error_code ec;
+  if (own.empty() || !fs::is_directory(own, ec)) {
+    status << "No NBA JAM UWP folder. Make one in D:\\DevelopmentFiles or on a USB drive,\n"
+              "put the game in it and a mods folder beside the game, one folder per mod\n"
+              "with its .pkg file(s), then start the app again.\n";
+    return {};
+  }
+  std::vector<fs::path> names = {"Base game"};
+  std::vector<fs::path> mods;
+  for (const auto& e : fs::directory_iterator(own / "mods", ec)) {
+    if (e.is_directory(ec)) mods.push_back(e.path().filename());
+  }
+  std::sort(mods.begin(), mods.end());
+  names.insert(names.end(), mods.begin(), mods.end());
+  status << names.size() - 1 << " mod(s) in " << (own / "mods").string() << "\n";
+
+  // The last one played comes up first.
+  std::string last = ReadText(local / "uwp_choice.txt");
+  while (!last.empty() && (last.back() == '\n' || last.back() == '\r')) last.pop_back();
+  size_t at = 0;
+  for (size_t i = 0; i < names.size(); ++i) {
+    if (names[i].string() == last) at = i;
+  }
+  const size_t pick = ChooseGame(names, at);
+  g_uwp_choice = names[pick].string();
+  std::ofstream(local / "uwp_choice.txt") << g_uwp_choice << "\n";
+  status << "playing: " << g_uwp_choice << "\n";
+  status.flush();
+
+  // The plain game: this folder's own, or the NBA JAM folder's.
+  const fs::path nba_jam = ExternalFolder(FolderName(""), "");
+  if (pick == 0) return PrepareGame(own, nba_jam, local, true, "", own, status);
+
+  // A mod, in a folder of its own, from the plain game in this folder (or
+  // the NBA JAM folder's when this one has none).
+  const bool own_has_game = !GameIn(own).empty() || !NbaFindPack(own).empty() ||
+                            !NbaFindLiveContainer(own).empty() ||
+                            !NbaFindDiscImage(own).empty();
+  const fs::path work = own / "games" / names[pick];
+  fs::create_directories(work, ec);
+  return PrepareGame(work, own_has_game ? own : nba_jam, local, true, g_uwp_choice,
+                     own / "mods" / names[pick], status);
+}
+
 }  // namespace
+
+std::string NbaUwpChoice() { return g_uwp_choice; }
 
 // Where the game comes from. The app's folder is looked for first:
 //
@@ -261,6 +498,7 @@ int UnpackFrom(const fs::path& from, const fs::path& into, bool packs, std::stri
 // mod in mod\).
 //
 // With no such folder, LocalState is used the same way, as before.
+
 std::filesystem::path NbaUwpGameRoot() {
   static bool decided = false;
   static fs::path decided_root;
@@ -294,117 +532,8 @@ std::filesystem::path NbaUwpGameRoot() {
     status << "working in " << work.string() << "\n";
     status.flush();
 
-    // The game: here already, or unpacked here.
-    std::string what;
-    const fs::path game = work / "game";
-    const fs::path marker_name = "openjam_mod.txt", base_name = "openjam_unpacked.txt";
-    // A mod applied by an earlier converter, or from other packages, is
-    // taken off by starting again from the plain game - only in the game folder
-    // this app unpacked itself, never in loose files someone put here.
-    if (!variant.empty() && fs::exists(game / base_name, ec)) {
-      const std::string had = ReadText(game / marker_name);
-      const std::vector<fs::path> p = NbaFindPs3Pkgs(work);
-      const bool f = fs::is_directory(work / "mod", ec);
-      if (!had.empty() && (!p.empty() || f) && had != ModSignature(p, f)) {
-        status << "the mod or the converter has changed since it was applied; starting again\n"
-                  "from the plain game\n";
-        status.flush();
-        fs::remove_all(game, ec);
-      }
-    }
-    fs::path root = GameIn(work);
-    if (root.empty() && direct && variant.empty()) {
-      // The base app's earlier copy in LocalState still plays.
-      root = GameIn(local);
-    }
-    if (root.empty()) {
-      const int n = UnpackFrom(work, game, true, &what, status);
-      if (n < 0) return {};
-      if (n > 0) {
-        root = game;
-        if (what == ".ojpk") std::ofstream(game / marker_name) << "pack\n";
-        else std::ofstream(game / base_name) << what << "\n";
-      }
-    }
-    if (root.empty() && !shared.empty()) {
-      // A mod app, from the plain game's folder.
-      if (const fs::path from = GameIn(shared); !from.empty()) {
-        status << "copying the game in " << from.string() << " into " << game.string() << "\n";
-        status.flush();
-        fs::copy(from, game, fs::copy_options::recursive | fs::copy_options::overwrite_existing,
-                 ec);
-        fs::remove(game / marker_name, ec);
-        if (!fs::exists(game / "default.xex", ec)) {
-          status << "copying it failed (" << ec.message() << ")\n";
-          return {};
-        }
-        std::ofstream(game / base_name) << "copied\n";
-        root = game;
-      } else {
-        const int n = UnpackFrom(shared, game, false, &what, status);
-        if (n < 0) return {};
-        if (n > 0) {
-          std::ofstream(game / base_name) << what << "\n";
-          root = game;
-        }
-      }
-    }
-    if (root.empty()) {
-      status << "No game yet. Put the game in a folder named "
-             << fs::path(FolderName(variant)).string()
-             << " in D:\\DevelopmentFiles or on a USB drive (or in this app's\n"
-                "LocalState): the Xbox Live download (the 42-character file with no\n"
-                "extension), a .iso, an .ojpk pack, or the unpacked game (default.xex\n"
-                "and data). Then start the app again.\n";
-      return {};
-    }
-    status << "game: " << root.string() << "\n";
-    if (variant.empty()) return root;
-
-    // The mod.
-    const fs::path marker = root / marker_name;
-    const std::vector<fs::path> pkgs = NbaFindPs3Pkgs(work);
-    const fs::path folder = fs::is_directory(work / "mod", ec) ? work / "mod" : fs::path();
-    if (pkgs.empty() && folder.empty()) {
-      if (fs::exists(root / base_name, ec) && !fs::exists(marker, ec)) {
-        status << "No " << variant << " mod yet. Put the mod's PS3 .pkg file(s) in "
-               << work.string() << ", then start the app again. The game is ready and stays.\n";
-        return {};
-      }
-      if (!fs::exists(marker, ec)) status << "mod: none given; playing the files as they are\n";
-      return root;
-    }
-    const std::string sig = ModSignature(pkgs, !folder.empty());
-    if (ReadText(marker) == sig) {
-      status << "mod: already applied\n";
-      return root;
-    }
-    fs::path opened = folder;
-    const fs::path scratch = work / "mod_ps3";
-    if (opened.empty()) {
-      fs::remove_all(scratch, ec);
-      for (const fs::path& p : pkgs) {
-        status << "opening " << p.string() << "\n";
-        status.flush();
-        if (NbaExtractPs3Pkg(p, scratch, status) < 0) {
-          status << "could not open " << p.filename().string() << "\n";
-          return {};
-        }
-      }
-      opened = scratch;
-    }
-    status << "applying the " << variant << " mod to " << root.string() << "\n";
-    status.flush();
-    const int n = NbaApplyPs3Mod(opened, root, status);
-    fs::remove_all(scratch, ec);
-    if (n <= 0) {
-      status << "the mod did not apply\n";
-      return {};
-    }
-    std::ofstream(marker, std::ios::binary) << sig;
-    status << "The mod is applied, and is applied again only when the .pkg file(s)\n"
-              "change.\n";
-    return root;
+    if (variant == "UWP") return PrepareChosen(own, local, status);
+    return PrepareGame(work, shared, local, direct, variant, work, status);
   }();
   return decided_root;
 }
@@ -419,34 +548,10 @@ void NbaUwpKeepBackButton() {
   }
 }
 
-void NbaUwpNoGame() {
+namespace {
+
+[[noreturn]] void ShowAndExit(const std::wstring& text) {
   using namespace winrt::Windows::UI;
-  const std::wstring local = NbaUwpLocalState().wstring();
-  const std::string variant = NbaUwpVariant();
-  const std::wstring wvariant(variant.begin(), variant.end());
-  const std::wstring name = FolderName(variant);
-  const std::wstring where =
-      L"- a folder named \"" + name + L"\" on a USB drive\n"
-      L"- D:\\DevelopmentFiles\\" + name + L" (Device Portal, File Explorer, DevelopmentFiles)\n"
-      L"- this app's LocalState folder:\n  " + local + L"\n\n";
-  const std::wstring text =
-      variant.empty()
-          ? L"No game found.\n\nPut NBA JAM: On Fire Edition in one of these:\n\n" + where +
-                L"as any of: your Xbox Live download (the file with a 42-character name "
-                L"and no extension, about 850 MB), a .iso, an .ojpk pack, or the "
-                L"unpacked game (default.xex and data).\n\n"
-                L"Then start the app again. The first start unpacks it, which takes a "
-                L"minute or two; status.txt in LocalState says how it went."
-          : L"No game found.\n\nThis app plays the " + wvariant +
-                L" mod. Put in one of these:\n\n" + where +
-                L"the mod's PS3 .pkg file(s), and the game itself: your Xbox Live "
-                L"download (the 42-character file with no extension) or a .iso. The "
-                L"game can instead go in an \"NBA JAM\" folder on the USB drive, shared "
-                L"with the other two apps. An .ojpk pack of the mod does it all in one "
-                L"file.\n\n"
-                L"Then start the app again. The first start unpacks the game and "
-                L"applies the mod, which takes a few minutes; status.txt in LocalState "
-                L"says how it went.";
   // What status.txt says comes first: it names the step that stopped, which
   // is what decides what to do, and the TV is easier to read than Device
   // Portal.
@@ -472,6 +577,50 @@ void NbaUwpNoGame() {
   }
   winrt::Windows::ApplicationModel::Core::CoreApplication::Exit();
   std::exit(0);
+}
+
+}  // namespace
+
+void NbaUwpNoGame() {
+  using namespace winrt::Windows::UI;
+  const std::wstring local = NbaUwpLocalState().wstring();
+  const std::string variant = NbaUwpVariant();
+  const std::wstring wvariant(variant.begin(), variant.end());
+  const std::wstring name = FolderName(variant);
+  const std::wstring where =
+      L"- a folder named \"" + name + L"\" on a USB drive\n"
+      L"- D:\\DevelopmentFiles\\" + name + L" (Device Portal, File Explorer, DevelopmentFiles)\n"
+      L"- this app's LocalState folder:\n  " + local + L"\n\n";
+  if (variant == "UWP") {
+    const std::wstring uwp =
+        L"No game found.\n\nMake a folder named \"NBA JAM UWP\" in DevelopmentFiles (Device "
+        L"Portal, File Explorer) or on a USB drive, and put in it:\n\n"
+        L"- the game: your Xbox Live download (the 42-character file with no extension) "
+        L"or a .iso. It can instead stay in an \"NBA JAM\" folder beside it.\n"
+        L"- a folder named mods, with one folder inside it for each mod, holding that "
+        L"mod's PS3 .pkg file(s).\n\n"
+        L"Then start the app again and pick the game or a mod.";
+    ShowAndExit(uwp);
+  }
+  const std::wstring text =
+      variant.empty()
+          ? L"No game found.\n\nPut NBA JAM: On Fire Edition in one of these:\n\n" + where +
+                L"as any of: your Xbox Live download (the file with a 42-character name "
+                L"and no extension, about 850 MB), a .iso, an .ojpk pack, or the "
+                L"unpacked game (default.xex and data).\n\n"
+                L"Then start the app again. The first start unpacks it, which takes a "
+                L"minute or two; status.txt in LocalState says how it went."
+          : L"No game found.\n\nThis app plays the " + wvariant +
+                L" mod. Put in one of these:\n\n" + where +
+                L"the mod's PS3 .pkg file(s), and the game itself: your Xbox Live "
+                L"download (the 42-character file with no extension) or a .iso. The "
+                L"game can instead go in an \"NBA JAM\" folder on the USB drive, shared "
+                L"with the other two apps. An .ojpk pack of the mod does it all in one "
+                L"file.\n\n"
+                L"Then start the app again. The first start unpacks the game and "
+                L"applies the mod, which takes a few minutes; status.txt in LocalState "
+                L"says how it went.";
+  ShowAndExit(text);
 }
 
 bool NbaModList(std::vector<NbaMod>* mods, size_t* active) {

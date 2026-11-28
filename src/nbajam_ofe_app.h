@@ -188,6 +188,10 @@ class NbajamOfeApp : public rex::ReXApp {
     // folder per mod without saves.path having to say so.
     if (const std::filesystem::path local = NbaUwpLocalState(); !local.empty()) {
       paths.user_data_root = local / "saves";
+      // NBA JAM UWP: each game picked at start keeps saves of its own.
+      if (const std::string choice = NbaUwpChoice(); !choice.empty()) {
+        paths.user_data_root = local / "saves" / choice;
+      }
       // A settings file put in LocalState is read in place of the
       // package's own, for trying a setting without a new build. Nothing is
       // copied there: with none, the package's settings stand.

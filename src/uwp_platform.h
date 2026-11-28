@@ -29,6 +29,10 @@ std::string NbaUwpVariant();
 // leaving the player at a splash screen that closes. Does not return.
 [[noreturn]] void NbaUwpNoGame();
 
+// In NBA JAM UWP, the game picked at start ("Base game" or a mod's folder
+// name), which gets saves of its own; empty in the other apps.
+std::string NbaUwpChoice();
+
 // Keeps B for the game. On the console B is also the system's Back, and an
 // app that leaves Back unhandled is closed back to the home screen.
 void NbaUwpKeepBackButton();
