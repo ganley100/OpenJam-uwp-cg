@@ -40,7 +40,7 @@ $meta = Join-Path $repo "metadata"
 if (Test-Path $meta) { Copy-Item -Recurse $meta (Join-Path $layout "metadata") }
 # The tiles: the mods' carry a banner with the mod's name.
 # NBA JAM UWP keeps the base game's tiles.
-$assets = if ($Variant -in "base", "UWP") { "Assets" } else { "Assets-$Variant" }
+$assets = if ($Variant -eq "base") { "Assets" } else { "Assets-$Variant" }
 Copy-Item -Recurse (Join-Path $repo "packaging\xbox\$assets") (Join-Path $layout "Assets")
 # The identity is how the app knows which it is (src/uwp_platform.cpp).
 $v = @{
